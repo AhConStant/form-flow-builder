@@ -1,0 +1,37 @@
+{
+  "output_dir": "流程表单",
+  "require_all": true,
+  "fields_per_row": 2,
+  "forms": [
+    {
+      "base": "99费用报销单",
+      "title": "费用报销单",
+      "fields": [
+        { "label": "编号", "type": "sn", "snFormula": "[Date:YY]-[NO:____]" },
+        { "label": "开始时间", "type": "datepicker" },
+        { "label": "结束时间", "type": "datepicker" },
+        { "label": "天数", "type": "input", "calc": "datediff({开始时间},{结束时间})+1" },
+        {
+          "label": "费用明细",
+          "type": "table",
+          "columns": [
+            { "label": "单价", "type": "inputNum", "decimal": 2 },
+            { "label": "数量", "type": "inputNum" },
+            { "label": "金额", "type": "inputNum", "decimal": 2, "calc": "{单价}*{数量}" }
+          ]
+        },
+        { "label": "合计金额", "type": "inputNum", "calc": "sum({费用明细\\金额})" },
+        { "label": "总价", "type": "inputNum", "decimal": 2, "calc": "{单价}*{数量}" },
+        { "label": "总价小写", "type": "inputNumDisplay", "format": "￥", "calc": "join({总价})" },
+        { "label": "总价大写", "type": "inputNumDisplay", "format": "RMB", "calc": "join({总价})" },
+        { "label": "是否市内", "type": "radio", "options": ["是", "否"] },
+        { "label": "市内地址", "type": "input", "require": false, "hideWhen": "{是否市内(值)}!='是'" },
+        { "label": "经费来源", "type": "checkbox", "options": ["院本部", "其他"] },
+        { "label": "其他经费", "type": "input", "require": false, "hideWhen": "('[tableKey\\经费来源(值)]').indexOf('其他')==-1" }
+      ],
+      "nodes": [
+        { "name": "科室负责人审批", "approver": "申请科室负责人", "condition": "无", "approveField": "" }
+      ]
+    }
+  ]
+}

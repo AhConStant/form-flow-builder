@@ -1,0 +1,298 @@
+---
+name: form-flow-builder
+description: 表单流程制作专用技能。把 Word/Excel 表格、截图或流程梳理文档里的表单，转成平台可导入的双端表单 JSON（移动视图 + Web 视图），并附字段清单与流程节点清单。当用户要做表单、建流程表单、做审批表、把纸质/Word 表格转成系统表单、生成移动视图或 Web 视图 JSON、批量做多个流程表单、核对表单 JSON 规范时使用。用户说「生成表单」= 只出移动视图 txt + Web 视图 txt 两个文件（不生成配置清单/流程图/流程导出 JSON）；说「生成表单流程」= 一次性导出整个流程导出 JSON（内含 Web 视图、移动视图、流程图），骨架已内置无需上传。触发词：表单流程制作、做表单、建表单、流程表单、表单 JSON、移动视图、Web 视图、审批表、申请表、意见栏、表单配置、批量生成表单、生成表单、生成表单流程、流水号、自动编号、大写金额、小写金额、自动计算、计算式、合计、天数、条件隐藏、选其他时填写。
+agent_created: true
+---
+
+# 表单流程制作
+
+把业务给的表格变成平台可导入的表单 JSON：**一个流程 → 移动视图 + Web 视图**（需要清单/流程图时另加，见口令表）。
+
+## 口令：用户说哪句话，就走哪条路
+
+**这条优先于其他所有流程判断**，听到对应说法直接按表执行，不要再自行决定出什么文件。
+
+> **第 0 步（动手前必问）**：拿到 Word / Excel / 截图 时，**先问一句「这份表里有没有重复表（明细子表）？」**
+> 用户答有 → 走两段式：
+> **第一段**跑 `build_export.py`，只出**移动视图 + 流程图**的导出包（`sheet` 为空，文件名 `流程导出_{base}_v1.0_移动视图.json`）；
+> 等用户导入平台后把**移动视图里那些重复表的表名**给我，**第二段**跑 `build_forms.py --table-name ... --web-only`，
+> **只补 Web 视图这一份 sheet（`{base}(Web视图).txt`）**，用户会把它单独导入同一个表单。
+> 第二段**不重打整包、不重建移动视图、不覆盖第一段产物**。
+> 用户答没有 → 一次出全。
+> 不要自己判断完就跳过这句；也不要反过来先出 Web。
+
+> **一令一物**：一个口令只出一种东西——「生成表单」= **两个视图 txt**；「生成表单流程」= **一个导出 JSON**。
+> 多出来的文件（配置清单、流程图、预览图）一律靠显式开关（`--notes`、单独跑 `build_flowchart.py`），
+> **绝不跟着口令自动多出**。含重复表时两个口令都走两段式：第一段只出**流程导出 JSON**（`sheet` 为空，移动 + 流程图），拿到 `bindTable` 后第二段**只补 Web 视图 sheet**。
+
+| 用户说 | 跑什么 | 产出 | 明确**不要**做的 |
+|---|---|---|---|
+| **「生成表单」**（无重复表） | `scripts/build_forms.py spec.json` | **只有两个 txt**：`(移动视图).txt` + `(Web视图).txt` | **不出配置清单、不出流程图、不出流程导出 JSON**（要清单加 `--notes`；要图单独跑 `build_flowchart.py`） |
+| **「生成表单」**（有重复表） | 第一段 `scripts/build_export.py spec.json` → 第二段 `scripts/build_forms.py spec.json --table-name ... --web-only` | 第一段一个 `流程导出_{base}_v1.0_移动视图.json`（sheet 空）；第二段**只一份** `{base}(Web视图).txt` | **第一段不出 txt**；**第二段不重打整包、不重建移动视图** |
+| **「生成表单流程」** | 同上两段式（无重复表时可一条 `build_export.py` 出全） | 无重复表：一个 `流程导出_{base}_v1.0.json`；有重复表：第一段 JSON（sheet 空）+ 第二段仅 Web 视图 txt | **不额外出配置清单**；有重复表时第二段**不要**再出整包 JSON |
+
+两个口号的口径：
+- **「生成表单」= 视图文件；「生成表单流程」= 流程导出 JSON**。
+- 有重复表时**两个口号的第一段都是同一个导出包**（`sheet` 空，移动 + 流程图），第二段都**只交付 Web 视图 sheet**。
+- 需要配置清单（字段/节点/待确认项）时加 `--notes`；需要流程图时单独跑 `build_flowchart.py`。
+- 重复表两段式：**第一段出导出包（移动 + 流程图）→ 向用户要 `bindTable` → 第二段只补 Web sheet**，表名不许猜、不许复用。
+
+**结构骨架已内置**：`assets/flow_export_skeleton.json`，直接跑即可，**不用再让用户上传平台导出件**。
+只有当用户要在**别的环境复刻**（对方平台版本不同、或要沿用某个已有流程的号段）时，才让用户给一份导出件并用 `--base-export` 指过去。
+
+## 这套东西的硬约束
+
+- 平台按 JSON 导入，格式错就导不进去。**不要手写控件对象**，一律从 `assets/` 里的标准模板 deepcopy。
+- 输出必须 **UTF-8 with BOM + 紧凑单行**，否则中文乱码、格式校验失败。
+- 字段名、顺序、格式以源文档为准，**不增删、不臆造**。
+- 布局标准：宽字段整行，短字段两两一行（标签 1 列 + 控件 2 列），一行最多 3 个字段；
+  「科室 + 排班起止日期 + 结束控件」这类一行多段，用相同的 `row` + `hideLabel`/`colspan` 对齐表格列。
+  **起止日期/时间是一组填写框**：`XX开始日期` + 开始控件 + **`XX起止日期`（原字段名，居中当这组标题）** + 结束控件，
+  整组占**连续的列**、不许跨行拆开；**两个日期控件列数必须相同（等宽）**，禁止一个占 1 列一个占 2 列；
+  **不用「至」字，也不生成「XX结束日期」标签**（结束控件 `hideLabel`），原字段名放中间。
+  一组 = 标签 1 + 控件 k + 标题 t + 控件 k：6 列 2/1/2、7 列 2/2/2、8 列 3/1/3、9 列 3/2/3。
+  行里还有科室等短字段时（显式 `row` 同排），先扣掉它们占的列，剩下的按上式排。
+- **标题、重复表表头、字段标签一律居中 + 自动换行**（`textwrap: true`），长标题不许溢出。
+- 默认值用 `defVal`（移动）/ `defaultVal`（Web）绑平台变量：姓名/申请人→`currentUserName`、工号→`loginID`、科室/部门→`departmentName`、申请日期→`currentDateTime`/`currentDate`、**电话/手机/联系方式/联系电话→`mobile`**。
+- **审批框、附件永不带默认值**（硬规则）：`approve`/`attachment` 的 `defVal`/`defaultVal` 必须留空——带默认值会导致平台前端打不开（「部门领导审核」被误绑 `departmentName` 的实测事故）。生成器已按控件类型兜底，校验器也会判 FAIL。
+- **Word 里的灰色字体 = 字段提示文字**：灰字所在格生成 `input`/`textarea`，灰字写 `placeholder`（移动端同步 `description`），不要写成固定值/`static`；字段名会触发默认值时加 `"bind": "none"`，防止「默认：申请人部门」覆盖提示。用 `scripts/scan_gray_hints.py 输入.docx --json` 扫描，别靠截图肉眼抄。
+- **表单已定稿就直接给双视图**：用户给了 `(移动视图).txt` + `(Web视图).txt` 时，跑 `build_export.py spec.json --mobile-view ... --web-view ...`，视图**原样嵌入、一个控件都不重建**；自检只核「嵌进去的和源文件一致」。此时 `FlowFormSet` 按意见框标题与流程步骤名比对，标题对不上就留空，不硬绑。
+- **有重复表时不能一次出双端**：第一段 `build_export.py` 出 `流程导出_{base}_v1.0_移动视图.json`（`sheet` 空，移动 + 流程图）；
+  每次重新向用户要重复表表名（`bindTable`）→ 第二段 `build_forms.py --table-name ... --web-only`
+  **只写 `{base}(Web视图).txt` 这一份 sheet**。表名不许猜、不许复用；第二段不重建移动端、不覆盖第一段产物、不重打整包。
+- **单独交付的 `(Web视图).txt` 不要顶层 `events`**（那是流程导出包内嵌 sheet 的形态）：生成器写盘时自动去掉，
+  嵌进导出包的那份仍保留 `events:"{}"`。手工改文件时别忘了这一条，否则与平台「单独导出」的形态不一致。
+- **多张重复表**：一个 Word 表里可能并排两张明细表（同一 `w:tbl` 出现第二次表头），各自建 `table`、各自要表名。
+  **列数不一致时自动加宽**：缺几列就把右侧几个非序号列各设为占两列，对齐最宽表（不删字段、移动端列不变）。
+- 重复表序号列：**移动端不生成**（平台自动带序号），Web 端保留序号列头、数据格只写 `style`+`bindTable`，并设 `showNumber` = 序号所在列的位置（1 起；无序号列为空）。
+- 重复表列里的「XX起止时间」：**一样要拆**，拆成相邻两列 `XX开始时间` + `XX结束时间`（一列只能挂一个控件，主表那种「原字段名当标题」的写法在这里放不下）。
+  该表列数 +1；多张重复表列数不齐时按加宽规则对齐最宽表。
+- 静态说明：**表格框内**的说明（表内注、分节标题）带四边框；**表格框外**、Word 正文里的「说明」段落必须无框（`variant: "plain"`，style 2），与 Word 版式一致。
+- **含换行或过长的说明逐行生成**，每行一个 `A:最后列` 合并行 + 行高，不要把多行塞进一个单元格。
+- **说明段落两端都要出**：`label` 类型 = 移动端 label 控件（正文 `description` 换行）+ Web 端逐行静态行；`static` 只出 Web（分节标题、表内注、行内碎片）。
+- **带公式的字段用 spec 的 `calc` / `hideWhen` / `format` / `snFormula` 表达**，写法见 `references/formulas.md`：
+  自动计算只支持 `input`/`inputNum`/`inputNumDisplay`（平台限制）；条件隐藏必须同时置初始 `isHidden`；
+  金额大小写是 `inputNumDisplay`（`￥` 小写、`RMB` 大写）+ `join()` 取值；流水号 `sn` 的 `snMode` = 自身 id。
+  **公式里引用的都是字段显示名（label），不是数据库字段编码**。
+- **Web 单元格也带公式**（平台实测，别只在移动视图写）：`autoCalc`、`hideFormula` 照搬到 Web 格；
+  但 **Web 端没有 `isHidden`**；`decimal` 只写在「带计算式的 inputNum」上；
+  `inputNumDisplay` → `SheetType: inputNumDisplay` + `buttonType: inputnumdisplay` + `displayFormat`/`approveDisplayFormat`。
+- **重复表数据格样式 = 第 18 个样式**（带框 + `#f2f2f2` 灰底）：有重复表时 `styles` 在模板 17 个之后追加一条，
+  数据行（含序号列、含跨列被覆盖的格子）都用 `style: 17`，表头仍是 15。
+- **包里的表名/FlowID/TemplateID 都只是占位**：导入时平台会重建表单与重复表并分配新号段（实测 163 → 167），
+  所以「重复表绑定不上」先看是不是在等平台自建，不要反复换表名。
+- **流程导出包里还要写 `FlowFormSet`（表单设置）+ 视图绑定**：不写，流程图里节点既没有字段权限也没有绑定视图。
+  生成器已自动出（申请人=全部非审批字段+`_Value`/`_Label` 变体，每个审批节点=自己的意见栏；
+  `FlowSetVersion.DefaultFormViewID` 等 4 个 = 主视图 ViewID）。平台节点键集见 `assets/flow_node_defaults.json`。
+- **`bindData` 按表单字段顺序发号**：重复表不占号，`label` 说明块**占号但不写单元格**（Web 端这行是纯文字）。
+  漏占一位，后面所有审批栏的 `bindData` 就整体前移一位、导入后意见框绑错（实测：说明块占 `KM0004` → 科室考核意见必须是 `KM0005`）。
+- JSON 只承载**表单**（字段、控件、审批意见栏）。审批节点、审批人、条件分支在平台流程设计器里配。
+  交付时在对话里把节点列清楚；要留档就加 `--notes` 出配置清单。
+- **审批栏之前不要插控件**：平台按控件顺序把「第 N 个审批意见框」自动配到「第 N 个审批节点」，
+  移动端在审批栏前多一个元素（典型是表内注/说明块 `label`），两个意见框就整体后移一位、全部绑错。
+  确实要在中间放说明时，交付必须写明「导入后在表单设计器里重绑审批框」——生成器会在终端和
+  配置清单的「待确认项」里自动告警。`static` 只出 Web、不影响移动端顺序，不触发告警。
+
+## 执行流程
+
+### 第 1 步：拿源文档，定位表单
+
+- 源文档可能是 .doc / .docx / .xlsx / 截图 / PDF。
+- 源文档是 `.xml` 且根标签是 `<TemplateSchema>`：先读 `references/template-schema-xml.md`。
+  那是平台**表单模板**导出件（`DataMappings` + `Views[].ViewHtml` 整段 HTML TABLE），**不是本技能产出的 sheet 视图**，
+  不能原样当导入件；按里面的属性字典翻译成 spec，并注意附件无 ref、意见栏三件套、按节点拆视图等平台惯例。
+- 源文档是 `.hbx`（根标签 `<Diagram Version="14">`）：先读 `references/diagram-hbx.md`。
+  那是**流程设计器源文件**，不是流程导出 JSON，也不是表单模板；解析 Nodes/Links 拿节点顺序、审批意见节点、
+  分支条件与退回环路，写进配置清单。分支表达式是平台宏（`myField` / `SYS://` / `UDFΛSQL`），**不能当 `hideWhen` JS 用**。
+  若同时有表单模板 XML，按「意见栏 ↔ 收意见的审批节点」逐条核对名字与顺序。
+- "流程梳理"文档里，正文是流程说明，**末尾「流程表单」表格才是要建的表单**。
+- **表头出现两次 = 两张明细表**（同一个 `w:tbl` 里并排写），逐张建 `table`，别当成一张表的数据行。
+- 解析方法（无第三方库的写法、Word COM 转换、坑位）见 `references/source-parsing.md`。
+
+### 第 2 步：出字段清单，问清不确定项
+
+先落一张表，再动手：
+
+| # | 字段名称 | 原始提示 | 推断控件 | 必填 | 同行分组 |
+|---|---|---|---|---|---|
+
+控件类型按 `references/field-rules.md` 的判定表推。**语义拿不准的先问用户，不要猜** —— 猜错整张表返工。
+必问的三类：单选/多选的选项枚举、多列明细要不要改重复表、审批意见栏是否要配同意/不同意。
+
+### 第 3 步：写 spec.json
+
+一份 spec 可放多个流程，一次产出全部文件。格式见 `references/spec-format.md`，示例 `assets/forms_spec.example.json`。
+
+```json
+{
+  "output_dir": "流程表单",
+  "require_all": true,
+  "fields_per_row": 2,
+  "forms": [
+    { "base": "01发文流程", "title": "发文稿纸",
+      "fields": [
+        { "label": "签发", "type": "approve" },
+        { "label": "缓急", "type": "radio", "options": ["普通", "急件", "特急"] }
+      ],
+      "nodes": [ { "name": "部门负责人审批", "approver": "发起部门负责人",
+                   "condition": "无", "approveField": "部门领导意见" } ] }
+  ]
+}
+```
+
+### 第 4 步：生成（有重复表时两段式）
+
+先看 spec 里有没有 `type: "table"` 字段。**有重复表和没有重复表，跑法不一样。**
+
+**有重复表**
+
+1. 先出**第一段：移动视图 + 流程图**（一个导出包，`sheet` 留空）：
+
+   ```bash
+   python scripts/build_export.py spec.json
+   ```
+
+   产出 `流程导出_{base}_v1.0_移动视图.json`：`sheet` 为空串，`elements`（移动 24 类控件）与
+   `FlowStep`（流程图）齐全；重复表未绑定时 **`FlowFormSet` 为空是正常的**（算不出字段编码）。退出码 3。
+   这一步**不要**再出 `(移动视图).txt` 或 SVG/HTML 流程图——一个导出包就够了。
+
+2. 向用户索要重复表表名。要的是平台里的 `bindTable`，形如
+   `wx_XXXXXXXX_Form_0000000123_0001`，不是显示名、不是列名、不是主表名。
+   用户只给显示名时，请他去平台表单设计器的重复表属性里抄全名。
+   **每次生成、每张表单都要重新要**；不要复用上一张表单/上一次的表名，
+   spec 里写过的 `tableName` 也会被忽略。
+   给多个表名时按**导入顺序**对应（第 1 张表 → `_0001`）；顺序拿不准就问一句，别猜。
+
+3. **第二段：只补 Web 视图这一份 sheet**
+
+   ```bash
+   python scripts/build_forms.py spec.json --table-name "字段名=wx_..._0001" --web-only
+   ```
+
+   多个重复表时每个都重复传一次 `--table-name`。本次**只写 `{base}(Web视图).txt`**：
+   不重建移动视图、不覆盖第一段产物、不重打整包 JSON。写盘自动去掉顶层 `events`（单独导出形态）。
+
+4. 校验通过再交付（`--web-only` 会自己校验；也可单独跑 `validate_form.py`）。
+
+**没有重复表**：一条命令同时出移动端与 Web 端（两个 txt，不加 `--notes` 就只出这两个）；
+要流程导出包则用 `build_export.py` 一次出全。
+
+**「生成表单流程」的两段式（同一个套路，第一段不变）**
+
+1. 第一段同上：`build_export.py` → `流程导出_{base}_v1.0_移动视图.json`（`sheet` 空、移动 + 流程图），退出码 3；
+2. 向用户要 `bindTable`（逐表逐个要，按导入顺序对应）；
+3. **第二段仍然只交付 Web 视图 sheet**：`build_forms.py --table-name ... --web-only` → `{base}(Web视图).txt`，单独导入同一个表单。
+   **不要**再出完整包 JSON——用户的口径是「给了表名只补 sheet」。
+   只有在用户**明确要求**「要一个包含 Web 的完整导出包」时，才回头跑
+   `build_export.py --table-name ...`（移动视图复用第一段、自检会同时校验 Web 行数/移动控件数/流程图节点数）。
+
+生成器会**先在内存校验 Web 视图**（结构 + 表格封口 + 空半行），不通过直接 FAIL、不写文件；所以不需要先生成再看图。
+
+重复表的 `columns` 必填（列名/类型/必填/选项）；列名写「序号」或标 `"auto": true` 的是序号列。
+序号列**移动端不生成**（平台自动带序号），Web 端保留列头、只写 `showNumber`；`showNumber` = 序号所在列的位置（1 起），没有序号列时为空。
+
+### 第 5 步：校验（不通过不算完成）
+
+```bash
+python scripts/validate_form.py "流程表单/01发文流程(Web视图).txt"
+```
+
+校验项：BOM、JSON 可解析、键序与模板一致、id/bindData 唯一、合并区不重叠且填充格齐全、`SheetType↔buttonType` 映射、`approves` 数组与 approve 单元格一致、attachment 无 `text` 键；**表格封口**（每行左/右边框闭合）与**空半行**（内容未铺满整行、右侧为无边框填充）；行高按文字行数自动适配（height 为正整数，标题 ≥100）；重复表额外校验 `tables[].tableRange/bindTable/showNumber`、数据格 `bindTable` 与 `bindField`（KC0001 起）、序号列不写 `bindField`（showNumber 为列位置时该列只剩 style+bindTable）。
+
+**无框说明行**（整行一个 style 2 格、跨满全部列、有文字）按 Word 正文样式跳过封口/空半行判定，并在结果里输出「提示: 行X 为无框说明行」；只跨部分列的无框行仍判 FAIL。
+
+全部 OK 再交付。有 FAIL 就修，不要嘴上说"应该没问题"。
+
+### 第 6 步：交付
+
+- 给文件路径 + 每个流程的字段数/行数/合并数/审批栏数。
+- 有重复表的，额外给：**每张表**的列数、每列列名/类型、各自的 `bindTable`（多表时逐表给，别只报一个）。
+- 附上**待确认项**（推断的控件类型、缺的枚举值、默认值取数规则、节点审批人）。
+- 移动端审批栏之前有说明块时，交付必须带上这句：**「平台按控件顺序配对审批节点，导入后要重绑两个审批框」**
+  （生成器已在终端告警；加 `--notes` 时也写进配置清单的「待确认项」）。
+- **流程图出图前会自检**：节点矩形两两求交，**重叠直接失败不写文件**；连线穿框、节点重名也会报出来（见 `flow-export.md`）。
+- **流程图默认不出**（「生成表单」只给两个 txt）。用户要图时再跑：
+  `python scripts/build_flowchart.py spec.json --out 流程表单` →
+  `{base}(流程图).svg` + `.html`。主线 = 开始 → 申请人 → 每个 `approve` 字段（按字段顺序）→ 结束；
+  一个意见栏 = 一个审批节点，**不要再手画**。
+- 要还原平台里**已经配好分支**的流程（含判断、通知执行），用 `--from-export`：节点形状按类型走
+  （判断=菱形、通知=绿色矩形、审批带「审」徽标），按 `nodeStyle` 坐标画正交折线；
+  `ConContent` 为空说明分支没配条件，输出里会提示，别自己编「是/否」。
+- **动作类型**（审批 / 多选择审批 / 通知执行 / 条件判断 / 存档 / 生成处理签 / 通知申请人或执行动作）：
+  名称判类型见 `scripts/flow_types.py`，顺序是「条件判断 → 多选择 → 存档 → 处理签 → 空步骤 → 审批 → 通知」；
+  **判不出来一律先按「通知执行」**（用户规则），并在输出里告警。
+  线性/两分支写 spec 的 `flow` 数组；**三路以上分支或嵌套判断**写 `graph`（节点带 x/y 手工排版）。
+- 有平台流程导出文件时，用 `--from-export` 再画一张，和上面那张逐字节比对：
+  一致 = 表单意见栏与平台流程节点数量/顺序/命名完全对齐；不一致就逐节点比 `actualName`。
+- 需要**一个 JSON 装下 Web + 移动 + 流程图**（平台导出格式）时：
+  `python scripts/build_export.py spec.json --out 导出`（骨架用内置的，不用传 `--base-export`）。
+  它会把 `sheet`（Web）、`template.elements`（移动）写成**字符串**塞进 `TemplateData`，并按 `approve` 重建 `FlowStep`；
+  生成后自动回抽校验，自检不过返回非 0。ID 段（FlowID/TemplateID/主表名）是占位号，导入前要按平台实际号段改。
+- 需要目视核对布局时：`python scripts/render_web_preview.py "xxx(Web视图).txt"`（预览器只核对字段/布局/列宽，不还原边框，别用它反推样式）。
+
+## 判断条件速查
+
+| 情况 | 处理 |
+|---|---|
+| 字段是 textarea/approve/attachment/radio/checkbox/table | 独占整行（A 标签 + 控件到最后列） |
+| 连续短字段 | 两两一行；不足一行时按本行字段数分配列宽、铺满整行，不留空半行 |
+| 整行字段（拟定单位、简历、说明） | 加 `fullRow: true`，标签 A + 控件到最后列 |
+| 一行多段（科室 + 起止日期 + 结束控件） | 给这些字段/静态文字相同的 `row`，用 `hideLabel`/`colspan` 对齐表格列；**起止一组占「标签 + 控件 + 标题 + 控件」，两控件等宽，剩余列全给科室**（8 列 → 科室控件 1 列） |
+| 起止日期/时间（**一组填写框**） | `XX开始日期` + 控件 + **`XX起止日期`（原字段名当标题）** + 控件；两控件等宽、整组占连续列不跨行，**不用「至」字、不出 `XX结束日期` 标签**（结束控件 hideLabel）；6 列 2/1/2、8 列 3/1/3 |
+| 重复表列里要放「起—止」 | **拆两列**：`XX开始时间` + `XX结束时间`（一列只能挂一个控件，不加「至」列）；spec 只写一列 `datepicker` 即自动展开，表宽 +1，其他重复表按右侧列自动加宽对齐 |
+| 长标签 + 内容 + 附件 | 标签 `A7:A8` 纵向合并 |
+| 字段名含 申请人/填报人/拟稿人/姓名（电话类除外） | 移动 `defVal=currentUserName`，Web `defaultVal=currentUserName` |
+| 字段名含 工号/登录账号 | 移动/Web 都绑 `loginID` |
+| 字段名含 电话/手机/联系方式/联系电话 | 移动/Web 都绑 `mobile` |
+| 字段名含 申请部门/申请科室/所在科室/所在专科 | 移动/Web 都绑 `departmentName`（电话、负责人、意见、审批、**审核/领导/批示/签发/会签** 类字段排除） |
+| 字段名含 申请日期/申请时间/填报日期 | 移动 `defVal=currentDateTime`，Web `defaultVal=currentDate` |
+| 字段名含 意见/审批/审核/批示/签发/会签 | 一律 `approve`，一栏 = 一个审批节点 |
+| 审批意见栏行高 | Web 默认 **80**；标签在 A 列折行超过一行时按行数抬高，不必手写 `height` |
+| 动作名称判不出类型 | 先按「通知执行」处理（画绿色通知节点、导出 `nodeNotice`/3），并回告警 |
+| 名称像审批但可能是通知（稿件发布执行、资料制作情况） | 按动作**类型**判，不看「意见/审批」字样 |
+| 明细表 ≥ 4 列 | `table` + `columns`；**第一段出导出包 → 要 `bindTable` → 第二段 `--web-only` 只补 Web** |
+| 说明段落（表尾说明，移动端也要看得到） | `label`：移动端走 label 控件（正文进 `description`、`\n` 分行、末尾补 `\n`），Web 端逐行静态行 |
+| 分节标题、表内注、行内布局碎片（至、（不少于6个月）） | `static` 整行合并；移动端省略 |
+| 长说明（含换行/字数多） | **逐行生成**：每个源文行一个 `A:最后列` 合并行，按字数估行高；框内带框、框外 `plain` 无框 |
+| 一个 Word 表里并排两张明细表（表头行出现两次） | 各建一个 `table`、各自要 `bindTable`；列数不齐时**右侧若干列自动加宽到占两列** |
+| 起止时间 / 起止日期（如「排班起止时间」） | **自动拆成两个日期控件**：`排班开始日期` + 结束控件，中间放原字段名「排班起止日期」当标题；**不用「至」、不出 `排班结束日期` 标签**；spec 只写一个字段即可 |
+| 静态说明行（表格框内：注、分节标题） | 四边框（style 16），不是无框 |
+| 静态说明（表格框外，Word 正文的「说明」段落） | `variant: "plain"`（style 2 无框），与 Word 一致；校验器会把它作为无框说明行跳过封口判定 |
+| 字段名重复出现 | 保留重复，不加后缀 |
+| 流水号 / 自动编号（「编号」栏且要平台自动生成） | `sn` + `snFormula`（默认 `[Date:YY]-[NO:____]`），只读非必填；`snMode` 生成器自动写 |
+| 「总价小写 / 总价大写」成对出现 | 各建一个 `inputNumDisplay`：`format: "￥"` / `"RMB"`，`calc: "join({总价})"` |
+| 天数 = 起止日期差 / 合计 = 子表求和 / 金额 = 单价×数量 | 用 `calc`：`datediff({开始},{结束})+1`、`sum({子表\\列})`、`{单价}*{数量}` |
+| 「选其他时填写」「是否市内→市内地址」这类联动 | 目标字段写 `hideWhen`（单选/多选判断带 `(值)`），并设 `require: false` |
+
+## 资源
+
+| 路径 | 用途 |
+|---|---|
+| `assets/mobile_view_template.txt` | 移动视图标准模板（15 类控件、属性全集） |
+| `assets/forms_spec.formulas.example.json` | 计算式/大小写金额/条件隐藏/流水号的 spec 示例 |
+| `assets/web_view_template.txt` | Web 视图标准模板（6 列起、17 样式，含重复表/静态说明样式） |
+| `assets/forms_spec.example.json` | spec 示例 |
+| `assets/mobile_view_reference.txt` | 移动视图格式参考（22 控件，含 label/approve/textarea/datepicker/inputNum，校验通过） |
+| `assets/web_view_reference.txt` | Web 视图格式参考（21 行，含审批栏 80、无框说明、多次合并，校验通过） |
+| `assets/flow_export_skeleton.json` | 流程导出 JSON 骨架（`--base-export` 默认值，内置无需上传） |
+| `assets/flow_node_defaults.json` | 平台流程节点完整默认键（FlowStep 200/201、FlowStepPart 96），导入后节点开关才与设计器一致 |
+| `scripts/build_forms.py` | 生成器，spec → 移动端/Web 端（重复表两段式） |
+| `scripts/build_flowchart.py` | 流程图：spec 推主线 / 平台导出还原，出 SVG + HTML |
+| `scripts/build_export.py` | 按平台导出格式打包：Web + 移动 + 流程图 → 一个 JSON |
+| `scripts/validate_form.py` | 校验器，可独立使用 |
+| `scripts/render_web_preview.py` | JSON → PNG 预览（需 pillow，可选） |
+| `scripts/doc2docx.ps1` | .doc → .docx（Word COM） |
+| `scripts/scan_gray_hints.py` | 扫描 .docx 灰色字体提示 → `{label,hint,row,col}` JSON |
+| `references/field-rules.md` | 控件判定表、必填、默认值、布局、命名、待确认清单 |
+| `references/mobile-schema.md` | 移动视图 JSON 规范 |
+| `references/web-schema.md` | Web 视图 JSON 规范 |
+| `references/spec-format.md` | spec.json 字段说明 |
+| `references/formulas.md` | 计算式 / 条件隐藏 / 金额大小写 / 流水号的平台公式写法 |
+| `references/source-parsing.md` | 源文档解析（doc/docx/xlsx/截图） |
+| `references/flow-export.md` | 平台流程导出 JSON 解析（划节点/坐标/主线） |
+| `references/template-schema-xml.md` | 平台表单模板 XML（TemplateSchema）解读：属性字典→spec 映射、意见栏三件套、按节点拆视图与固定明细套路 |
+| `references/diagram-hbx.md` | 流程设计器 .hbx 解读：节点/连线结构、分支表达式宏、意见栏交叉验证、退回环路与多 TemplateId 风险 |
+
+## 换平台 / 换模板
+
+平台升级导致模板变了（出现新控件类型、新单元格键）：用平台导出的标准控件文件替换 `assets/` 下两份模板，同步更新 `build_forms.py` 的 `MOBILE_TYPES` / `WEB_BTN` / `WIDE`，以及 `validate_form.py` 的 `CELL_KEYS`。**以平台实测文件为唯一基准，不要凭记忆扩展键名。**

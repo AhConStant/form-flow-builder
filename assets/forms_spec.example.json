@@ -1,0 +1,115 @@
+{
+  "_comment": "示例：一份 spec 描述多个流程；脚本按 base 生成 (移动视图).txt / (Web视图).txt / (配置清单).md。字段 type 用移动视图白名单的 13 类之一。",
+  "output_dir": "流程表单",
+  "require_all": true,
+  "fields_per_row": 2,
+  "forms": [
+    {
+      "base": "13数据提取流程",
+      "title": "数据提取申请表",
+      "fields": [
+        {
+          "label": "申请科室",
+          "type": "selectDep"
+        },
+        {
+          "label": "申请人",
+          "type": "input"
+        },
+        {
+          "label": "联系电话",
+          "type": "input"
+        },
+        {
+          "label": "数据分级",
+          "type": "radio",
+          "options": [
+            "公开",
+            "内部",
+            "核心"
+          ]
+        },
+        {
+          "label": "申请类型",
+          "type": "radio",
+          "options": [
+            "一次性",
+            "周期性"
+          ]
+        },
+        {
+          "label": "数据提取内容",
+          "type": "textarea"
+        },
+        {
+          "label": "使用期限",
+          "type": "select",
+          "options": [
+            "长期",
+            "临时"
+          ]
+        },
+        {
+          "label": "临时开始时间",
+          "type": "datepicker"
+        },
+        {
+          "label": "临时结束时间",
+          "type": "datepicker"
+        },
+        {
+          "label": "申请日期",
+          "type": "datepicker"
+        },
+        {
+          "label": "附件",
+          "type": "attachment"
+        },
+        {
+          "label": "备注说明",
+          "type": "static",
+          "variant": "section",
+          "text": "备注说明"
+        },
+        {
+          "label": "说明1",
+          "type": "static",
+          "variant": "note",
+          "text": "1. 数据提取须经科室负责人审批后方可执行。"
+        },
+        {
+          "label": "科室负责人意见",
+          "type": "approve"
+        },
+        {
+          "label": "信息科意见",
+          "type": "approve"
+        },
+        {
+          "label": "分管领导审批意见",
+          "type": "approve"
+        }
+      ],
+      "nodes": [
+        {
+          "name": "科室负责人审批",
+          "approver": "申请科室负责人",
+          "condition": "提交后直接流转",
+          "approveField": "科室负责人意见"
+        },
+        {
+          "name": "信息科审批",
+          "approver": "信息科负责人",
+          "condition": "数据分级 = 内部 或 核心",
+          "approveField": "信息科意见"
+        },
+        {
+          "name": "分管领导审批",
+          "approver": "分管院领导",
+          "condition": "数据分级 = 核心",
+          "approveField": "分管领导审批意见"
+        }
+      ]
+    }
+  ]
+}
