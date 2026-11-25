@@ -21,9 +21,12 @@ __pycache__/
 *.pyc
 
 # 本地工作产物（不进入技能本体仓库）
+# 注意：不要在这里写 build_*.py / render_*.py ——
+# 技能本体的 scripts/build_forms.py、build_export.py、build_flowchart.py、
+# render_web_preview.py 会被一起忽略掉（1.0.0 就是这么丢掉四个核心脚本的）。
 spec_*.json
-build_*.py
-render_*.py
+flow_export_*.json
+流程导出_*.json
 run_export_*.py
 _workbuddy/
 .workbuddy/
