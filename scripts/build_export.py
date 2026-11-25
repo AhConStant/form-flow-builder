@@ -146,6 +146,9 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
             # 这两个键缺了，平台导入后「同意执行」不会默认选中下一步，只会落到「结束」。
             "optStep": "" if node == "nodeJudge" else "1",
             "importantShunt": ",".join(str(t) for t in r["to"]),
+            # 退回设置：除开始/申请人/结束/判断外，节点默认「允许退回」
+            # （平台「退回设置」页的开关 = isCanReturn；退回类型=退回申请人、具体步骤=无限制，全按默认）
+            "isCanReturn": node not in ("nodeStart", "nodeFirst", "nodeEnd", "nodeJudge"),
             "SortID": 0, "layer": 0, "trendMode": 0, "shuntNext": 0,
         })
         # 注意：importantShunt 不要 pop——平台导出件里每个步骤都有，值见上。

@@ -90,6 +90,9 @@ agent_created: true
   `optStep` 非判断节点写 `"1"`、判断节点空串；`importantShunt` = 该步骤出线目标的 `DrawID`
   （多条按出线顺序逗号分隔，结束节点空串）。缺了这两个键，导入后审批节点的「同意执行」不选下一步、直接落到「结束」，得逐个手点。
   基准见平台导出件：开始 `1/2`、申请人 `1/3`、审批 `1/4…`、通知 `1/7`、结束 `1/''`、两分支判断 `''/6,5`。
+- **节点默认开启退回**（用户口径 2026-11-25）：审批/通知/动作节点的 `isCanReturn=true`；
+  开始、申请人、结束、判断节点不设。其余退回项按平台默认（退回类型=退回申请人、具体步骤=无限制、
+  退回意见非必填、回填/提醒=跟系统开关），对应 `returnTrend=0`、`CanReturnStepID=""`、`returnFillBackMode=9`、`returnNotifyAffectedDone=9`。
 - **「权限分配」（授权对象/监控权限/知会权限）不在流程导出 JSON 里**，只能在平台里配；
   JSON 能带的权限只有附件权限（`FlowParticipant` + `FlowExtraOperation`，`tabCode=AttachAuthor`），生成器已自动写。
   别再花时间试图从导出件里反推那一页——逐键比对过，`FlowSet`/`FlowSetVersion`/`FlowSetVersionPart` 与平台完全一致，里面没有任何权限位。

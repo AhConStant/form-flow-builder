@@ -71,6 +71,22 @@
 判断(2支)   optStep='' importantShunt='6,5'
 ```
 
+
+## P3 · 节点默认开启「退回」（2026-11-25）
+
+**需求**：导入后每个流程节点的「退回设置 → 允许退回」默认是关的，要逐个开。
+
+**补丁位置**：`scripts/build_export.py` 的 `build_steps()`，`step.update({...})` 里加
+
+```python
+            "isCanReturn": node not in ("nodeStart", "nodeFirst", "nodeEnd", "nodeJudge"),
+```
+
+其余退回项保持平台默认：`returnTrend=0`（退回申请人）、`CanReturnStepID=""`（具体步骤无限制）、
+`returnFillBackMode=9` / `returnNotifyAffectedDone=9`（跟系统开关）、`isReturnNeedComment=False`（退回意见非必填）。
+
+平台字段名：退回开关 = `isCanReturn`（不是 `isCanReject`，那个是「不同意」按钮）。
+
 ## 无法通过本技能实现的部分（记下来，别再试）
 
 - **流程「权限分配」页（授权对象 / 监控权限 13 项 / 知会权限）不在 `流程导出_*.json` 里**。

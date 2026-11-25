@@ -1,4 +1,4 @@
-# 把 legacy .doc / .docx 统一转成 .docx，便于用 python zipfile 解析表格
+﻿# 把 legacy .doc / .docx 统一转成 .docx，便于用 python zipfile 解析表格
 #
 # 用法（PowerShell）:
 #   .\doc2docx.ps1 -Src "D:\工作\武汉船舶\流程梳理\流程梳理" -OutDir "D:\工作\武汉船舶\_converted"

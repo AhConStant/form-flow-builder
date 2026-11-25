@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$Version
 )
@@ -18,7 +18,9 @@ $backup = Backup-CurrentSkill
 Copy-RepoToInstallDir
 
 $installedVersion = Get-LocalVersion
-Write-Host "安装完成：$SkillName $installedVersion"
+$skillVersion = Get-SkillVersion
+Write-Host "安装完成：$SkillName 仓库版本 $installedVersion（技能包 $skillVersion）"
+Write-Host "说明：仓库版本用于本仓库发布管理，技能包版本对应上游技能（见 CHANGELOG.md）。"
 Write-Host "安装目录：$InstallDir"
 if ($backup) {
     Write-Host "旧版本备份：$backup"
