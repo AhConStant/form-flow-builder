@@ -14,7 +14,9 @@
 产出：{base}(流程图).svg  +  {base}(流程图).html（内嵌 SVG，便于预览/发人）
 """
 import argparse
+import copy
 import json
+import math
 import os
 import re
 import sys
@@ -47,6 +49,7 @@ C_JUDGE_FILL = "#fdf3e3"
 C_JUDGE_STROKE = "#e0b071"
 C_NOTICE_FILL = "#eef6ee"
 C_NOTICE_STROKE = "#8cc08a"
+C_ACTION_TEXT = "#a8661f"
 
 # 各动作类型的配色：(填充, 描边/图标色)
 KIND_COLORS = {
@@ -78,6 +81,11 @@ def esc(s):
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+def strip_no(name):
+    """去掉步骤名前的层级序号（1、5.1、5.1.1.1 …）：画布上的 label 就是去序号后的名字。"""
+    return re.sub(r"^\s*\d+(?:\.\d+)*\s*", "", str(name or "")).strip()
+
+
 def wrap(text, max_chars):
     """中文按字数折行：超过一行时均分成若干行，避免出现「8 字 + 1 字」这种孤字。"""
     text = str(text)
@@ -91,7 +99,8 @@ def wrap(text, max_chars):
 
 def node_spec(kind, name):
     """kind: start / first / approve / multi / judge / notice / action / end"""
-    lines = wrap(name, 8)
+    # 菱形上下收窄，按 6 字折行；其余按 8 字
+    lines = wrap(name, 6 if kind == "judge" else 8)
     if kind in ("start", "end"):
         h = PILL_H
     elif kind == "judge":
@@ -111,6 +120,21 @@ def draw_node(n, x, y):
     """按节点类型画图形；x/y 是左上角。返回 svg 片段。"""
     kind, lines, h, w = n["kind"], n["lines"], n["h"], n["w"]
     out = []
+    if kind == "action":
+        # 执行动作不画节点框：步骤名直接压在连线上（白色描边保证可读）。
+        # 节点区域内补一段竖线，否则上下两段边会在文字处留出断口。
+        cx = x + w / 2
+        cy = y + h / 2
+        out.append('<line x1="%.1f" y1="%d" x2="%.1f" y2="%d" stroke="%s" stroke-width="3"/>'
+                   % (cx, y, cx, y + h, C_ARROW))
+        lh = 18
+        ty = cy + 4.5 - (len(lines) - 1) * lh / 2
+        for i, ln in enumerate(lines):
+            out.append('<text x="%.1f" y="%.1f" font-family="%s" font-size="13" fill="%s" '
+                       'stroke="%s" stroke-width="5" paint-order="stroke" '
+                       'text-anchor="middle">%s</text>'
+                       % (cx, ty + i * lh, FONT, C_ACTION_TEXT, C_BG, esc(ln)))
+        return "\n".join(out)
     if kind == "judge":
         pts = " ".join("%.1f,%.1f" % p for p in diamond_points(x, y, w, h))
         out.append('<polygon points="%s" fill="%s" stroke="%s" stroke-width="1.4"/>'
@@ -145,13 +169,14 @@ def draw_node(n, x, y):
                    'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>'
                    % (icon_x - 5, cy - 1, ic))
 
-    lh = 20
-    ty = cy + 5 - (len(lines) - 1) * lh / 2
+    lh = 17 if kind == "judge" else 20
+    fs = 12 if kind == "judge" else 14
+    ty = cy + 4 - (len(lines) - 1) * lh / 2
     tx = cx if icon_x is None else icon_x + 20 + (w - 20) // 2
     for i, ln in enumerate(lines):
-        out.append('<text x="%.1f" y="%.1f" font-family="%s" font-size="14" fill="%s" '
+        out.append('<text x="%.1f" y="%.1f" font-family="%s" font-size="%d" fill="%s" '
                    'text-anchor="middle">%s</text>'
-                   % (tx, ty + i * lh, FONT, C_TEXT, esc(ln)))
+                   % (tx, ty + i * lh, FONT, fs, C_TEXT, esc(ln)))
     badge = BADGES.get(kind)
     if badge:
         txt, color = badge
@@ -171,20 +196,26 @@ def draw_arrow(y1, y2, x=CX):
     return "\n".join(out)
 
 
-def draw_edge(pts):
+def draw_edge(pts, arrow=True):
     """正交折线箭头：pts 是 [(x,y), ...]，最后一点是箭头尖端。
 
     线段必须画到「箭头底部」（尖端回退 11px），否则两点直边会退化成只有箭头没有线。
+    arrow=False：执行动作节点只是线上的文字，不画箭头，避免看起来像终止在那里。
     """
     (x1, y1), (x2, y2) = pts[-2], pts[-1]
-    if abs(x2 - x1) < 1:
-        base = (x2, y2 - 11)
+    if arrow:
+        if abs(x2 - x1) < 1:
+            base = (x2, y2 - 11)
+        else:
+            base = (x2 - 11, y2)
+        body = list(pts[:-1]) + [base]
     else:
-        base = (x2 - 11, y2)
-    body = list(pts[:-1]) + [base]
+        body = list(pts)
     d = "M%.1f %.1f " % body[0] + " ".join("L%.1f %.1f" % p for p in body[1:])
     out = ['<path d="%s" fill="none" stroke="%s" stroke-width="3" '
            'stroke-linejoin="round"/>' % (d, C_ARROW)]
+    if not arrow:
+        return "\n".join(out)
     if abs(x2 - x1) < 1:
         out.append('<path d="M%.1f %.1f l-7 -11 l14 0 z" fill="%s"/>' % (x2, y2, C_ARROW))
     else:
@@ -247,7 +278,7 @@ def canvas_rows(rows):
     """flow_types.layout() 的行 → 画布行（补 node_spec；菱形左缘补差保持居中）。"""
     out = []
     for r in rows:
-        n = node_spec(r["kind"], r["name"])
+        n = node_spec(r["kind"], r.get("label") or r["name"])
         x = r["x"] + ((NODE_W - JUDGE_W) / 2 if r["kind"] == "judge" else 0)
         out.append({"draw": r["draw"], "x": x, "y": r["y"], "n": n,
                     "to": r.get("to") or []})
@@ -268,10 +299,38 @@ def find_overlaps(rows):
     return bad
 
 
+def free_lane(rows, a_draw, b_draw, sx, tx, ly, limit, minx, miny):
+    """折线的横段别压在别的节点上：撞到就往下让到该节点底部，最多让到 limit。
+
+    典型场景：「下一步 → 判断是否包含院领导」从最右列横切回主线时，
+    默认高度正好压在中间的「主管院长审批」方框上。
+    """
+    lo, hi = min(sx, tx), max(sx, tx)
+    for _ in range(len(rows)):
+        hit = None
+        for o in rows:
+            if o["draw"] in (a_draw, b_draw):
+                continue
+            ox, oy = o["x"] - minx, o["y"] - miny
+            if ox + o["n"]["w"] < lo or ox > hi:
+                continue
+            if oy - 8 <= ly <= oy + o["n"]["h"] + 8:
+                hit = oy + o["n"]["h"] + 14
+                break
+        if hit is None:
+            break
+        ly = hit
+    return min(ly, limit)
+
+
 def find_crossings(rows):
     """折线是否穿过无关节点（只看线段中点是否落在别的节点矩形内）。"""
     hits = []
     by_draw = {r["draw"]: r for r in rows}
+    if not rows:
+        return hits
+    w_cv = (max(r["x"] + r["n"]["w"] for r in rows)
+            - min(r["x"] for r in rows)) or 1.0
     for r in rows:
         for t in r.get("to") or []:
             dst = by_draw.get(t)
@@ -281,6 +340,10 @@ def find_crossings(rows):
             sy = r["y"] + r["n"]["h"]
             tx = dst["x"] + dst["n"]["w"] / 2
             ty = dst["y"]
+            span = (dst["y"] - r["y"]) - r["n"]["h"]
+            if span > 240 and (abs(sx - tx) < 1 or abs(sx - tx) > w_cv * 0.5):
+                # 这类边渲染时走外侧沟槽，不按「直线中点」判断，否则会误报穿框
+                continue
             mids = [((sx + sx) / 2, (sy + ty) / 2)] if abs(sx - tx) < 2 else \
                    [(sx, (sy + ty) / 2), (tx, (sy + ty) / 2)]
             for (mx, my) in mids:
@@ -294,7 +357,12 @@ def find_crossings(rows):
 
 
 def report_layout(rows, strict=True):
-    """检查排版问题：重叠一律报错；连线穿框只提示。返回问题条数。"""
+    """检查排版问题：重叠一律报错；连线穿框只提示。返回问题条数。
+
+    先折叠执行动作再检测——它们不画框，坐标落在连线中段（本就贴着上下游），
+    按实框比对会一律误报「重叠」。
+    """
+    rows, _, _ = fold_action_rows(copy.deepcopy(rows))
     ov = find_overlaps(rows)
     cr = find_crossings(rows)
     if ov:
@@ -310,9 +378,14 @@ def rows_from_graph(graph):
     """spec 的 graph：节点可自带 x/y（手工排版），否则走分层自动布局。"""
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
+    # label = 图上显示的文字（不含层级序号）；name 仍作唯一键连边
+    lab = {n["name"]: (n.get("label") or strip_no(n["name"])) for n in nodes if isinstance(n, dict)}
     manual = nodes and all(isinstance(n, dict) and "x" in n and "y" in n for n in nodes)
     if not manual:
-        return flow_types.layout_graph(nodes, edges)
+        rows = flow_types.layout_graph(nodes, edges)
+        for r in rows:
+            r["label"] = lab.get(r["name"], r["name"])
+        return rows
     flow_types.assert_unique([n["name"] for n in nodes])
     rows, idx = [], {}
     for i, n in enumerate(nodes):
@@ -320,6 +393,7 @@ def rows_from_graph(graph):
         if key not in flow_types.TYPE_META:
             key = flow_types.classify(n["name"])
         rows.append({"draw": i + 1, "name": n["name"], "key": key,
+                     "label": lab.get(n["name"], n["name"]),
                      "kind": flow_types.meta_of(key)["kind"],
                      "x": float(n["x"]), "y": float(n["y"]), "to": []})
         idx[n["name"]] = rows[-1]
@@ -329,21 +403,231 @@ def rows_from_graph(graph):
     return rows
 
 
-def draw_edge_label(x, y, text):
-    """分支条件文字：贴在判断节点正下方的竖线右侧，逐行往下排。
+def draw_edge_action_label(x, y, text, canvas_w=None, per=12):
+    """长连线上的执行动作文字：与 action 节点同样式（橙色 13px + 白色描边），压在线上。
 
-    白色描边（paint-order=stroke）保证压到连线也读得清。
+    canvas_w 给定时把 x 夹在画布内、并把超长文字按 per 字折行，
+    否则贴边分支（如「判断人员类别 → 结束」）的文字会被裁掉一半。
     """
     lines = [ln for ln in str(text).split("\n") if ln.strip()]
     if not lines:
         return ""
-    out, h = [], 15
-    top = y - h * len(lines)          # y = 文字底边（目标节点上沿再上移 6px）
+    if canvas_w:
+        lines = [s for ln in lines for s in wrap(ln, per)]
+        tw = max(len(s) for s in lines) * 13
+        x = max(x, tw / 2.0 + 8)
+        x = min(x, canvas_w - tw / 2.0 - 8)
+    out, lh = [], 18
+    ty = y + 4.5 - (len(lines) - 1) * lh / 2
+    for i, ln in enumerate(lines):
+        out.append('<text x="%.1f" y="%.1f" font-family="%s" font-size="13" fill="%s" '
+                   'stroke="%s" stroke-width="5" paint-order="stroke" '
+                   'text-anchor="middle">%s</text>'
+                   % (x, ty + i * lh, FONT, C_ACTION_TEXT, C_BG, esc(ln)))
+    return "\n".join(out)
+
+
+def draw_edge_label(x, y, text, canvas_w=None, per=12, gap=None):
+    """分支条件文字：压在判断出线的竖线中段，底下垫一块画布色小底片。
+
+    gap 给定时按竖向可用空间决定折几行，避免文字长度超过两节点之间的间距、
+    糊到目标节点框上（老 spec 的分支名很长的场景）。
+    y 是文字块的中心（不是底边）——之前按底边算，文字整体偏上一截，
+    横线正好从两行之间穿过，读起来像被划掉。
+    """
+    lines = [ln for ln in str(text).split("\n") if ln.strip()]
+    if not lines:
+        return ""
+    if gap:
+        n_ok = max(1, min(6, int((gap - 6) // 15)))
+        per = max(6, -(-max(len(l) for l in lines) // n_ok))
+    if canvas_w:
+        lines = [s for ln in lines for s in wrap(ln, per)]
+        tw = max(len(s) for s in lines) * 11
+        x = max(x, tw / 2.0 + 8)
+        x = min(x, canvas_w - tw / 2.0 - 8)
+    h = 15
+    total = h * len(lines)
+    top = y - total / 2.0
+    wmax = max(len(s) for s in lines) * 11 + 8
+    out = ['<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="3" fill="%s" opacity="0.93"/>'
+           % (x - wmax / 2.0, top - 2, wmax, total + 4, C_BG)]
     for i, ln in enumerate(lines):
         out.append('<text x="%.1f" y="%.1f" font-family="%s" font-size="11" fill="#3d5866" '
-                   'stroke="#ffffff" stroke-width="3.5" paint-order="stroke" '
+                   'stroke="#ffffff" stroke-width="3" paint-order="stroke" '
                    'text-anchor="middle">%s</text>'
-                   % (x, top + h * (i + 1), FONT, esc(ln)))
+                   % (x, top + h * (i + 0.78), FONT, esc(ln)))
+    return "\n".join(out)
+
+
+def fold_action_rows(rows):
+    """执行动作在图上不画框、也不参与连线：前驱直接连后继，步骤名只作文字。
+
+    与 build_export.fold_action_nodes 同源——导出的包里这些步骤不存在，
+    图上如果还按「src→action→dst」两段画，跨列的 action 文字会脱离连线。
+    返回 (去掉 action 的 rows, {draw: node}, {(src, dst): [被折叠的 action draw…]})。
+    """
+    acts = {r["draw"] for r in rows if r["n"]["kind"] == "action"}
+    if not acts:
+        return rows, {}, {}
+    by = {r["draw"]: r for r in rows}
+    texts = {r["draw"]: (r["x"], r["y"], r["n"]) for r in rows if r["draw"] in acts}
+    chain = {}
+    for r in rows:
+        if r["draw"] in acts:
+            continue
+        new_to = []
+        for t in r.get("to") or []:
+            cur, seen, path = t, set(), []
+            while cur in acts and cur not in seen:
+                seen.add(cur)
+                path.append(cur)
+                nxts = by[cur].get("to") or []
+                cur = nxts[0] if nxts else None
+                if cur is None:
+                    break
+            if cur is None:
+                continue
+            if cur not in new_to:
+                new_to.append(cur)
+            chain.setdefault((r["draw"], cur), []).extend(path)
+        r["to"] = new_to
+    return [r for r in rows if r["draw"] not in acts], texts, chain
+
+
+def dist_to_path(x, y, pts):
+    """点到折线的最短距离（判断 action 的原坐标是不是本来就压在线上）。"""
+    best = 1e9
+    for i in range(len(pts) - 1):
+        (x1, y1), (x2, y2) = pts[i], pts[i + 1]
+        dx, dy = x2 - x1, y2 - y1
+        if dx == dy == 0:
+            d = math.hypot(x - x1, y - y1)
+        else:
+            t = max(0.0, min(1.0, ((x - x1) * dx + (y - y1) * dy) / (dx * dx + dy * dy)))
+            d = math.hypot(x - (x1 + t * dx), y - (y1 + t * dy))
+        best = min(best, d)
+    return best
+
+
+def path_points(pts):
+    """折线上可放文字的位置：各段中点，按段长从长到短。
+
+    文字最终放哪一段由 place_action_texts 统一决定——先按长度优先，
+    撞到别的文字就往下一段退，保证「文字永远贴在自己那条线上、且互不重叠」。
+    返回 (x, y, ori)：ori="h" 横线段（文字整块抬到线上方，线保持连续），
+    ori="v" 竖线段（文字压在线上，靠底片断开竖线）。
+    """
+    out = []
+    for i in range(len(pts) - 1):
+        (x1, y1), (x2, y2) = pts[i], pts[i + 1]
+        ln = math.hypot(x2 - x1, y2 - y1)
+        ori = "h" if abs(x2 - x1) >= abs(y2 - y1) else "v"
+        out.append((ln, ((x1 + x2) / 2.0, (y1 + y2) / 2.0, ori)))
+    if len(out) > 1:                       # 首尾那一小截是接头，优先级最低
+        out[0] = (out[0][0] * 0.35, out[0][1])
+        out[-1] = (out[-1][0] * 0.35, out[-1][1])
+    out.sort(key=lambda t: -t[0])
+    keep = [p for ln, p in out if ln > 12]
+    return keep or [(pts[0][0], pts[0][1], "v")]
+
+
+def _text_y(cy, ori, block_h):
+    """横线上的文字抬到线上方；竖线上的文字保持压在线上。"""
+    return cy - (block_h / 2.0 + 6) if ori == "h" else cy
+
+
+def _hit_box(cx, cy, tw, bh, boxes):
+    """文字块是否压在某个节点方框上（文字是先画的，会被后画的方框盖掉半截）。"""
+    for bx, by, bw, bh_ in boxes:
+        if (cx - tw / 2.0 < bx + bw + 4 and cx + tw / 2.0 > bx - 4
+                and cy - bh / 2.0 < by + bh_ + 4 and cy + bh / 2.0 > by - 4):
+            return True
+    return False
+
+
+def place_action_texts(items, canvas_w, fixed=(), boxes=()):
+    """items: [(候选点列表, node_spec)] → [(x, y, node_spec)]，逐个避让。
+
+    距离判断用「横向需错开半宽、纵向需错开一行」，两段文字挨太近就换到下一段；
+    boxes 给了就再避一遍方框——压在框上的字会被方框盖掉下半截（用户 2026-11-26 指出
+    「医技药人员」糊在「医务科初审」上边框那种）。
+    """
+    # 手工摆过的先占位（换成同口径的「中心 x, 中心 y, 文字宽」），自动摆的绕着它们走
+    placed = [(fx, fy, max(len(l) for l in fan["lines"]) * 13 + 12)
+              for fx, fy, fan in fixed]
+    out = []
+    for cands, an in items:
+        tw = max(len(ln) for ln in an["lines"]) * 13 + 12
+        bh = max(1, len(an["lines"])) * 18
+        best = None
+        for cx, cy, ori in cands:
+            cx = max(tw / 2.0 + 6, min(cx, canvas_w - tw / 2.0 - 6))
+            cy = _text_y(cy, ori, bh)
+            # 先原地，再沿线的方向滑开一点（横线上下滑、竖线上下滑），直到不压框、不压字。
+            # 顺序固定为「先下后上」：同一条边上有多个执行动作时按链路顺序排，
+            # 往下走的那一支才不会出现「流程结束」跑到「存档」上面（用户 2026-11-26 指出）。
+            for dy in (0, 24, -24, 44, -44):
+                yy = cy + dy
+                if (all(abs(cx - px) > (tw + pw) / 2.0 - 8 or abs(yy - py) > 22
+                        for px, py, pw in placed)
+                        and not _hit_box(cx, yy, tw, bh, boxes)):
+                    best = (cx, yy, tw)
+                    break
+            if best:
+                break
+        if best is None:
+            # 同一条边上有两三个执行动作（如「存档 → 流程结束」）：沿线的方向错开，
+            # 文字仍然贴着自己那条线，只是上下分开。
+            cx, cy, ori = cands[0]
+            cx = max(tw / 2.0 + 6, min(cx, canvas_w - tw / 2.0 - 6))
+            cy = _text_y(cy, ori, bh)
+            for dy in (28, 54, 80, 108, -28, -54, -80, -108):
+                if (all(abs(cx - px) > (tw + pw) / 2.0 - 8 or abs(cy + dy - py) > 22
+                        for px, py, pw in placed)
+                        and not _hit_box(cx, cy + dy, tw, bh, boxes)):
+                    best = (cx, cy + dy, tw)
+                    break
+            if best is None:
+                best = (cx, cy, tw)
+        placed.append(best)
+        out.append((best[0], best[1], an))
+    return out
+
+
+def corridor_clear(rows, a_draw, b_draw, x, y0, y1, minx, miny):
+    """同列直落的竖线是否一路无遮挡（中间没有别的方框）。"""
+    for o in rows:
+        if o["draw"] in (a_draw, b_draw):
+            continue
+        ox = o["x"] - minx
+        oy = o["y"] - miny
+        if ox - 2 <= x <= ox + o["n"]["w"] + 2 and oy < y1 - 2 and oy + o["n"]["h"] > y0 + 2:
+            return False
+    return True
+
+
+def draw_action_text(x, y, n):
+    """执行动作的文字（橙色 13px + 白描边 + 画布色底片），压在连线上，不画框。
+
+    底片是必须的：文字压在折线上时，横/竖线会从两行字中间穿过去，
+    看起来像被划掉（用户 2026-11-26 指出的「不需要主管院长审批」那种）。
+    """
+    lines = [ln for ln in n["lines"] if ln.strip()]
+    if not lines:
+        return ""
+    cx, cy = x + n["w"] / 2, y + n["h"] / 2
+    lh = 18
+    ty = cy + 4.5 - (len(lines) - 1) * lh / 2
+    wmax = max(len(ln) for ln in lines) * 13 + 10
+    block = len(lines) * lh
+    out = ['<rect x="%.1f" y="%.1f" width="%.1f" height="%.1f" rx="3" fill="%s" opacity="0.93"/>'
+           % (cx - wmax / 2.0, cy - block / 2.0, wmax, block + 4, C_BG)]
+    for i, ln in enumerate(lines):
+        out.append('<text x="%.1f" y="%.1f" font-family="%s" font-size="13" fill="%s" '
+                   'stroke="%s" stroke-width="5" paint-order="stroke" '
+                   'text-anchor="middle">%s</text>'
+                   % (cx, ty + i * lh, FONT, C_ACTION_TEXT, C_BG, esc(ln)))
     return "\n".join(out)
 
 
@@ -351,6 +635,9 @@ def render_canvas(rows):
     """按平台画布坐标渲染，支持分支与汇聚（正交折线）。"""
     if not rows:
         return render_svg([])
+    # 执行动作不画框、不参与连线：先折叠掉，再算画布范围——
+    # 否则 action 的 x/y（只用来参考、实际文字由折线决定）会把画布撑得很宽。
+    rows, action_texts, act_chain = fold_action_rows(rows)
     pad = 46
     minx = min(r["x"] for r in rows) - pad
     maxx = max(r["x"] + r["n"]["w"] for r in rows) + pad
@@ -364,6 +651,10 @@ def render_canvas(rows):
              '<rect width="100%" height="100%" fill="url(#g50)"/>',
              '<rect width="100%" height="100%" fill="url(#g10)"/>']
     by_draw = {r["draw"]: r for r in rows}
+    boxes = [(r["x"] - minx, r["y"] - miny, r["n"]["w"], r["n"]["h"]) for r in rows]
+    lab_parts = []          # 连线文字延后到所有线画完再画，底片才能压住线
+    act_pending = []        # 执行动作文字：坐标脱离连线的，按折线自动摆
+    act_fixed = []          # 执行动作文字：手工摆好、已在连线上的，原样保留
     # 先画线，后画节点，避免线压住图形
     lane = {}
     for r in rows:
@@ -376,11 +667,28 @@ def render_canvas(rows):
             tx = dst["x"] + dst["n"]["w"] / 2 - minx
             ty = dst["y"] - miny
             span = (dst["y"] - r["y"]) - r["n"]["h"]
-            if abs(sx - tx) < 1 and span <= 240:
+            w_cv = maxx - minx
+            mid = w_cv / 2.0
+            if ty < sy - 6:
+                # 向上回退的边（「转科主任/护士长审批」回原审批、「审批完成」回系统管理员）：
+                # 直上或下-横-下都会从节点框中间穿过去，统一走画布左侧沟槽，
+                # 再从目标节点左侧水平进入。多条回退边按出线序号错开，避免叠在一起。
+                gx = 44 + 16 * i
+                ty_mid = dst["y"] + dst["n"]["h"] / 2 - miny
+                tx_l = dst["x"] - dst["n"]["w"] / 2 - minx - 4
+                pts = [(sx, sy), (sx, sy + 18), (gx, sy + 18),
+                       (gx, ty_mid), (tx_l, ty_mid)]
+            elif abs(sx - tx) < 1 and (span <= 240 or corridor_clear(
+                    rows, r["draw"], dst["draw"], sx, sy, ty, minx, miny)):
                 pts = [(sx, sy), (tx, ty)]
-            elif span > 240 and abs(sx - tx) > 1:
-                # 跨层长边（跳过中间层）：绕外侧沟槽走，避免穿过中间节点
-                gx = (minx - minx + 24) if tx < sx else (maxx - minx - 24)
+            elif span > 240 and (abs(sx - tx) < 1 or abs(sx - tx) > w_cv * 0.5):
+                # 真正需要绕行的跨层长边只有两种：
+                #   ① 同列直落（如「判断人员类别 → 结束」的异常出口）；
+                #   ② 横跨大半幅（如最右一列回到中间主线）。
+                # 只跨两三层的普通汇聚（各科审批 → 主管院长）走下面的「下-横-下」折线，
+                # 否则每条都要绕到画布最外侧，图会被一堆横线糊住。
+                # 左侧沟槽留 44px，给压线的执行动作文字留出排版空间（24 会贴到画布边）。
+                gx = (w_cv - 72) if sx > mid else 44
                 pts = [(sx, sy), (sx, sy + 20), (gx, sy + 20),
                        (gx, ty - 24), (tx, ty - 24), (tx, ty)]
             else:
@@ -388,13 +696,41 @@ def render_canvas(rows):
                 ly = sy + off
                 if ly > ty - 30:                     # 折返太高时改走上方，留出徽标位置
                     ly = max(sy + 12, ty - 30)
+                ly = free_lane(rows, r["draw"], dst["draw"],
+                               sx, tx, ly, ty - 26, minx, miny)
                 pts = [(sx, sy), (sx, ly), (tx, ly), (tx, ty)]
-            parts.append(draw_edge(pts))
+            parts.append(draw_edge(pts, arrow=(dst["n"]["kind"] != "action")))
+            for ad in act_chain.get((r["draw"], dst["draw"])) or []:
+                ax0, ay0, an = action_texts[ad]
+                hx = ax0 + an["w"] / 2.0 - minx
+                hy = ay0 + an["h"] / 2.0 - miny
+                aw = max(len(l) for l in an["lines"]) * 13 + 12
+                ah = max(1, len(an["lines"])) * 18
+                # 手工摆过、本来就压在这条线上的：尊重原坐标；
+                # 但压在方框上的不算——那种字会被后画的方框盖掉半截，必须重摆。
+                if dist_to_path(hx, hy, pts) <= 5 and not _hit_box(hx, hy, aw, ah, boxes):
+                    act_fixed.append((hx, hy, an))
+                else:
+                    act_pending.append((path_points(pts), an))
             lab = EDGE_LABELS.get((r["n"]["name"], dst["n"]["name"]))
-            if lab and r["n"]["kind"] == "judge" and (dst["y"] - r["y"]) <= 240:
-                # 只标「判断 → 本分支第一个节点」的短边；空分支直连汇合点的长边不标，
-                # 否则文字会压在沿途节点上（空分支含义见交付说明）
-                parts.append(draw_edge_label(tx, ty - 6, lab))
+            if lab and r["n"]["kind"] == "judge":
+                if len(pts) == 6:
+                    # 走外侧沟槽的跨层长边：文字用执行动作样式压在沟槽竖线中段
+                    lab_parts.append(draw_edge_action_label(
+                        pts[2][0], (pts[1][1] + pts[3][1]) / 2.0, lab, w_cv))
+                elif len(pts) == 4:
+                    # 「下-横-下」折线：压横段中点。压在最后那段竖线上会顶到目标框顶
+                    # （两节点之间的竖向间隙本来就窄，容不下 3~4 行字）。
+                    lx, ly_ = (pts[1][0] + pts[2][0]) / 2.0, pts[1][1]
+                    per = max(6, int(abs(pts[1][0] - pts[2][0]) / 12.5))
+                    lab_parts.append(draw_edge_label(lx, ly_, lab, w_cv, per=per))
+                else:
+                    # 同列直线：压在两个节点之间的中点
+                    lab_parts.append(draw_edge_label(
+                        tx, (sy + ty) / 2.0, lab, w_cv, gap=max(span, 44)))
+    parts.extend(lab_parts)      # 连线文字最后画：底片才能盖住所有经过的线
+    for ax, ay, an in act_fixed + place_action_texts(act_pending, w_cv, act_fixed, boxes):
+        parts.append(draw_action_text(ax - an["w"] / 2.0, ay - an["h"] / 2.0, an))
     for r in rows:
         parts.append(draw_node(r["n"], int(r["x"] - minx), int(r["y"] - miny)))
     parts.append("</svg>")
@@ -473,6 +809,9 @@ def main(argv):
                     if sep in k:
                         sn, dn = k.split(sep, 1)
                         EDGE_LABELS[(sn.strip(), dn.strip())] = v
+                        # 画布上的节点名已去掉层级序号（label），这里同时存一份去序号的键，
+                        # 否则 edgeLabels 永远匹配不上（标签不会显示）。
+                        EDGE_LABELS[(strip_no(sn), strip_no(dn))] = v
                         break
             raw = rows_from_graph(form["graph"])
             rows = canvas_rows(raw)

@@ -87,6 +87,39 @@
 
 平台字段名：退回开关 = `isCanReturn`（不是 `isCanReject`，那个是「不同意」按钮）。
 
+## P4 · 09 步骤表判定规则 + 执行动作折叠（2026-11-26）
+
+**需求来源**：用户拿平台「09 流程步骤表」截图（列：步骤名称 / 步骤说明 / 执行人 / 下一步骤）+ 一份 `TemplateSchema` XML，要求直接出包。三轮纠正后固化成规则。
+
+**四条硬规则**（详见 `references/action-icons.md`）
+
+1. 类型**按图标判**，不按名字猜：绿箭头=执行动作、红人/红箭头=通知执行、窗口+▼=判断、红勾剪贴板=审批、红圈=结束。特别注意「归档/存档」两条反例：修缮流程 `12 归档处理`（红箭头）是通知执行，议题流程 `12 议题归档`（绿箭头）是执行动作。
+2. 「下一步骤」列属于**同一行左侧**的步骤名：有值照抄（可跳号），为空默认接下一级。
+3. 跳号越过、且**没有任何入边**的行 = 未启用 → 节点、连线、表单意见框都不生成；不臆造并行分支、不硬串串行。
+4. 执行动作**不生成步骤**：只做连线文字。
+
+**补丁位置**
+
+1. 新增 `references/action-icons.md`（对照表 + 09 识别流程）。
+2. `scripts/flow_types.py` → `_RULES` 重排，按红字改判：
+
+```python
+    ("action",  ("通知申请人或执行动作",)),                    # 绿箭头 → 执行动作
+    ("notice",  ("请选择是否需要", "请选择是否", "是否需要")),   # 必须排在「会签/审批」前
+    ("notice",  ("多选择", "多选审批", "多人选择")),            # 多选择审批 → 通知执行
+    ("action",  ("存档", "归档", "备案存", "入档")),            # 文件夹 → 执行动作
+```
+
+3. `scripts/build_export.py`
+   - `fold_action_nodes(rows)`：出包前删 `action` 节点、前驱直连后继、步骤名写 `FlowStepCon.note`；相邻同名去重。
+   - `strip_no()`：`actualName` / `nextActualName` 一律去层级序号（`label` 优先，老 spec 只有 `name` 时兜底）。
+   - `build_steps()` 的 `named_branch`：判断出线文字 = `edgeLabels` → 折叠的动作名 → 分支节点名；两支都无分支名才写「是/否」。
+4. `scripts/build_flowchart.py`：`fold_action_rows()` 渲染前折叠动作；`place_action_texts(..., boxes)` 避框避字；走线三档（同列短线 / 外侧沟槽 / 下-横-下过 `free_lane()`），回退边（目标在上方）走左侧沟槽。
+5. `scripts/build_forms.py`：`lcell()` 把 `hideWhen` 同时写到标签格；`ROW_TYPES` 补 `radio` / `checkbox`。
+6. `SKILL.md` 硬约束三条、`references/flow-export.md` 两节、`references/field-rules.md`「选项含其他补输入框」。
+
+**验收口径**：导出包里 `ActionTypeID==4` 必须为 0 个；被折叠的步骤名出现在对应连线 `note` 里；`actualName` 不含 `1 `、`5.1.1 ` 这类序号；每条连线两端都在节点表里（无孤岛、无死胡同）。
+
 ## 无法通过本技能实现的部分（记下来，别再试）
 
 - **流程「权限分配」页（授权对象 / 监控权限 13 项 / 知会权限）不在 `流程导出_*.json` 里**。

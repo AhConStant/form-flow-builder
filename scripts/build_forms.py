@@ -54,7 +54,7 @@ COLUMN_TYPES = ["input", "textarea", "radio", "checkbox", "singleCheckbox", "sel
 
 # 可以放进自定义行（row）的类型：窄控件 + 静态文字
 ROW_TYPES = {"input", "inputNum", "inputNumDisplay", "sn", "select", "selectDep", "datepicker",
-             "singleCheckbox", "static"}
+             "singleCheckbox", "radio", "checkbox", "static"}
 
 # 「XX起止时间」→ 主表字段拆成 XX开始时间 + 至 + XX结束时间；重复表列拆成相邻两列
 RANGE_RE = re.compile(r"^(?P<pre>.*?)起止(?P<suf>.*)$")
@@ -624,6 +624,18 @@ def build_web(form, wtpl, per_row):
             c["hideFormula"] = to_formula(hide)       # Web 端只有 hideFormula，没有 isHidden
         return c
 
+    def lcell(f, style, text=None):
+        """标签格：控件有 hideWhen 时标签格必须带同一条 hideFormula。
+
+        否则条件不满足时只是控件消失、左侧标签仍留在表里，出现「有标签没控件」的空行
+        （用户 2026-11-26 指出：新增的「其他学习类型」标签格也要写隐藏条件）。
+        """
+        c = {"style": style, "text": f["label"] if text is None else text}
+        hide = (f.get("hideWhen") or "").strip()
+        if hide:
+            c["hideFormula"] = to_formula(hide)
+        return c
+
     def put(ri, cells):
         row = {"cells": {}}
         for ci, cell in cells.items():
@@ -683,7 +695,7 @@ def build_web(form, wtpl, per_row):
     def place_wide(f):
         r = cur[0]
         lab_s, ctrl_s = styles_for(r)
-        put(r, {0: {"style": lab_s, "text": f["label"]},
+        put(r, {0: lcell(f, lab_s),
                 1: ccell(f, ctrl_s, [0, last - 1])})
         merges.append("B%d:%s%d" % (r + 1, col_letter(last), r + 1))
         if f.get("height"):
@@ -702,7 +714,7 @@ def build_web(form, wtpl, per_row):
         cells, mg, pos = {}, [], 0
         for f, size in zip(group, sizes):
             ctrl_span = size - 1
-            cells[pos] = {"style": lab_s, "text": f["label"]}
+            cells[pos] = lcell(f, lab_s)
             cells[pos + 1] = ccell(f, ctrl_s, [0, ctrl_span - 1] if ctrl_span > 1 else None)
             if ctrl_span > 1:
                 mg.append("%s%d:%s%d" % (col_letter(pos + 1), r + 1,
@@ -739,7 +751,7 @@ def build_web(form, wtpl, per_row):
                 lspan = int(f.get("labelColspan", 1))
                 if lspan < 1:
                     raise ValueError("[%s] 字段「%s」labelColspan 非法" % (form["base"], f["label"]))
-                cells[ci] = {"style": lab_s, "text": f["label"]}
+                cells[ci] = lcell(f, lab_s)
                 if lspan > 1:      # 长标签跨列：与起止行的「开始」标签对齐用
                     cells[ci]["merge"] = [0, lspan - 1]
                     merges.append("%s%d:%s%d" % (col_letter(ci), r + 1,
@@ -775,15 +787,16 @@ def build_web(form, wtpl, per_row):
         deficit = ncols - len(cols)
         spans = [1] * len(cols)
         if deficit > 0:
-            cand = [i for i in range(len(cols) - 1, -1, -1) if not is_auto_column(cols[i])]
+            # 从左往右加宽：原表里最左边的通常是「名称」这类长文本列（如 500:100:100:100），
+            # 从右往左加宽会把「单位」「数量」撑得很宽、名称反而挤成一行 4 字。
+            cand = [i for i in range(len(cols)) if not is_auto_column(cols[i])]
             if len(cand) < deficit:
                 raise ValueError(
                     "[%s] 重复表「%s」只有 %d 列、需要补 %d 列，但可加宽的列不足"
                     % (form["base"], f["label"], len(cols), deficit))
             widened = []
-            for i in cand[:deficit]:
-                spans[i] = 2
-                widened.append(cols[i]["label"])
+            spans[cand[0]] += deficit        # 多出来的列全给最左边的长文本列
+            widened.append(cols[cand[0]]["label"])
             print("       · 重复表「%s」%d 列 → 对齐 %d 列：加宽 %s"
                   % (f["label"], len(cols), ncols, "、".join(reversed(widened))))
         # 序号显示：showNumber = 序号所在列的位置（1 起）；该列只留 bindTable 样式格

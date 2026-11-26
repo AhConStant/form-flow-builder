@@ -136,6 +136,18 @@
 - `FlowStepCon` 里对应有两条连线，`tabCode` 都是源节点的类型（`nodeJudge`）；
 - **`ConContent` 为空 = 这条分支没有配置条件**。实测这份导出里两条分支的 `ConContent`/`ConContentDesc` 全空，
   说明判断节点只做了分流、没设条件表达式，画图时**不要自己编「是/否」标签**，直接在输出里提示「分支条件为空」。
+- 判断分支的连线文字（`FlowStepCon.note`）取值顺序：`graph.edgeLabels`（手写）→ 折叠掉的执行动作步骤名 →
+  分支节点自己的名字（`label`，即「包含院领导、中层干部、护士长，转院领导审批」这类条件句）。
+  **只有「两支 + 两条都没有语义分支名」的简单是非判断才写「是/否」**；
+  同一个判断里不能一条写全句、另一条写「是」，那是自相矛盾（用户 2026-11-26 指出）。
+  实现见 `build_export.build_steps()` 里的 `named_branch`。
+
+## 步骤名不带层级序号
+
+平台导入后自己按结构编号，`actualName` / 连线 `nextActualName` 里再带一遍 `1 `、`5.1.1 ` 就重复了。
+`graph.nodes` 有 `label` 用 `label`；**老 spec 只有 `name`（带序号）时，`build_export.strip_no()` 兜底去掉序号**，
+`build_flowchart.py` 同理（画布节点名 = `label` 或 `strip_no(name)`）。
+两处都要改，只改导出不改流程图会出现「图上有序号、包里没有」。
 
 ## FlowStepPart 有残留，别拿它数节点
 

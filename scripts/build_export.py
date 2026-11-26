@@ -72,6 +72,15 @@ def strip_element(el):
     return out
 
 
+def strip_no(name):
+    """去掉步骤名前的层级序号（1、5.1、5.1.1.1 …）。
+
+    平台导入后会自己按结构编号，步骤名里再带一遍序号就重复了；
+    老 spec 的 nodes 只有 name（带序号）、没有 label，这里做兜底。
+    """
+    return re.sub(r"^\s*\d+(?:\.\d+)*\s*", "", str(name or "")).strip()
+
+
 def fit_con_name(name, limit=50):
     """连线的目标节点名受平台 wmFlowStepCon.NextActualName varchar(50) 限制。
 
@@ -81,6 +90,61 @@ def fit_con_name(name, limit=50):
     if len(name) <= limit:
         return name
     return name.split("：")[0] + "）" if "：" in name else name[:limit]
+
+
+def fold_action_nodes(rows):
+    """把「执行动作」节点折叠成连线文字（用户 2026-11-26 明确要求）。
+
+    执行动作在流程图上只是压在连线上的文字、不是步骤：导出包里必须**删掉这些节点**，
+    让前驱直接连到后继，原步骤名成为这条连线上的文字（FlowStepCon.note / ConContentDesc）。
+    返回 (折叠后的 rows, {(源名, 目标名): 连线文字})；draw 重新按顺序编号。
+    """
+    acts = {r["draw"]: r for r in rows if r.get("kind") == "action"}
+    if not acts:
+        return rows, {}
+    succ = {r["draw"]: list(r.get("to") or []) for r in rows}
+
+    def walk(d, seen):
+        """沿 action 链一路向前，返回 [(终点 draw, [途经的执行动作文字…])]。"""
+        if d not in acts:
+            return [(d, [])]
+        if d in seen:                      # 防环
+            return []
+        lab = acts[d].get("label") or strip_no(acts[d]["name"])
+        out = []
+        for nxt in succ.get(d, []):
+            for end, labs in walk(nxt, seen | {d}):
+                out.append((end, [lab] + labs))
+        return out
+
+    keep = [r for r in rows if r["draw"] not in acts]
+    old2new = {r["draw"]: i + 1 for i, r in enumerate(keep)}
+    by_old = {r["draw"]: r for r in keep}
+    labels = {}
+    for r in keep:
+        new_to = []
+        for t in r.get("to") or []:
+            if t in acts:
+                for end, labs in walk(t, set()):
+                    if end not in old2new:
+                        continue
+                    nd = old2new[end]
+                    if nd not in new_to:
+                        new_to.append(nd)
+                    if labs:
+                        # 相邻同名的执行动作只留一个（源表常见「同名连续两步」），
+                        # 否则连线文字会出现「不同意，退回申请 → 不同意，退回申请」。
+                        ded = []
+                        for s in labs:
+                            if not ded or ded[-1] != s:
+                                ded.append(s)
+                        labels[(r["name"], by_old[end]["name"])] = " → ".join(ded)
+            elif t in old2new and old2new[t] not in new_to:
+                new_to.append(old2new[t])
+        r["to"] = new_to
+    for r in keep:
+        r["draw"] = old2new[r["draw"]]
+    return keep, labels
 
 
 def build_steps(form, flow_id, step_base, con_base, part_base):
@@ -102,6 +166,14 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
                  + [f["label"] for f in form["fields"] if f["type"] == "approve"]
                  + ["结束"])
         rows = flow_types.layout(flow_types.normalize_items(names))
+    # 显示名：graph.nodes 里的 label（不含层级序号）；name 仍作内部唯一键/连线用
+    if form.get("graph"):
+        _lab = {n["name"]: (n.get("label") or strip_no(n["name"]))
+                for n in (form["graph"].get("nodes") or []) if isinstance(n, dict)}
+        for r in rows:
+            r["label"] = _lab.get(r["name"], r["name"])
+    # 执行动作不生成步骤：折叠成连线文字（用户 2026-11-26 明确要求）
+    rows, _fold_labels = fold_action_nodes(rows)
     by_draw = {r["draw"]: r for r in rows}
     # 连线文字：graph.edgeLabels 的键是「源节点名 → 目标节点名」，值是要显示的字（可能带换行）。
     # 平台把它落在 FlowStepCon 的 note（varchar(200)）与 ConContentDesc（text）上。
@@ -111,7 +183,9 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
             if isinstance(k, str) and "→" in k and isinstance(v, str):
                 a, b = k.split("→", 1)
                 if v.replace("\n", "").strip():
-                    labels[(a.strip(), b.strip())] = v.replace("\n", "").strip()
+                    # 换行是给人看的排版，平台 note 里压成空格，不能直接删——删了会粘成一坨
+                    labels[(a.strip(), b.strip())] = re.sub(r"\s*\n\s*", " ", v).strip()
+    labels.update(_fold_labels)   # 执行动作折叠出来的连线文字
     warns = []
     for r in rows:
         meta = flow_types.meta_of(r["key"])
@@ -134,7 +208,7 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
         icon = {"nodeStart": "green", "nodeEnd": "orange"}.get(node, "purple")
         step.update({
             "FlowID": flow_id, "StepID": step_base + i, "DrawID": draw,
-            "stepName": flow_types.label_of_node(node), "actualName": r["name"],
+            "stepName": flow_types.label_of_node(node), "actualName": r.get("label") or r["name"],
             "node": node, "nodeGroup": node, "ActionTypeID": at,
             "nodeIcon": "%s el-icon-success i ep:success-filled " % icon,
             "nodeStyle": "left:%dpx;top:%dpx;" % (int(r["x"]), int(r["y"])),
@@ -159,30 +233,38 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
                      "DrawID": draw, "ID": part_base + i})
         parts.append(part)
         outs = r["to"]
+        # 该判断是否已有分支带语义名（例如折叠成连线文字的执行动作步骤名）。
+        # 只要有一条分支写的是「包含/不包含…」这类说明，其余分支就不能再写「是/否」，
+        # 否则同一个判断上一支写全句、下一支写「是」，看起来自相矛盾（用户 2026-11-26 指出）。
+        named_branch = any(labels.get((r["name"], by_draw[t]["name"]))
+                           for t in outs if t in by_draw)
         for t in outs:
             dst = by_draw.get(t)
             if not dst:
                 continue
             dmeta = flow_types.meta_of(dst["key"])
             # 判断出线的分支文字：有 edgeLabels 用它（note 限 200 字）；
-            # 没有就两支写「是/否」、多支写目标节点名。ConContentDesc 是「 文字 」带前后空格。
+            # 简单是非判断（两支且无任何语义分支名）写「是/否」，否则写目标分支名。
+            # ConContentDesc 是「 文字 」带前后空格。
             lab = labels.get((r["name"], dst["name"]), "")
+            dst_show = dst.get("label") or strip_no(dst["name"])
             if lab:
                 note, desc = lab[:200], " %s " % lab
             elif node == "nodeJudge":
-                if len(outs) == 2:
+                if len(outs) == 2 and not named_branch:
                     first = outs.index(t) == 0
                     note = "是" if first else "否"
-                    desc = (" %s " % dst["name"]) if first else (" 【取反】 %s " % dst["name"])
+                    desc = (" %s " % dst_show) if first else (" 【取反】 %s " % dst_show)
                 else:
-                    note, desc = dst["name"][:200], " %s " % dst["name"]
+                    branch = dst_show
+                    note, desc = branch[:200], " %s " % branch
             else:
                 note, desc = "", ""
             cons.append({
                 "FlowID": flow_id, "ConID": con_base + len(cons),
                 "DrawID": draw, "NextDrawID": t,
                 "tabCode": node, "nextStepName": dmeta["label"],
-                "nextActualName": fit_con_name(dst["name"]),
+                "nextActualName": fit_con_name(dst_show),
                 "ConContent": "", "ConContentDesc": desc, "SortID": 0,
                 "comparType": 0, "conValueType": 0, "flowVersion": "1.0",
                 "inadvanceSelAllStepMode": 9, "inadvanceSelStepUserMode": 9,
