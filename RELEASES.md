@@ -6,6 +6,31 @@
 - 次版本：新增能力、新增参考文档、兼容现有用法。
 - 修订号：缺陷修复、脚本稳定性、规则补充。
 
+## 1.3.4 - 2026-11-28
+
+公文表单三件套：**业务模块 / 数据选取控件 / 公文属性书签**。
+
+用户给了 09 公文表单截图（左上角红框「发文信息」）并明确：这类截图 = 公文表单，
+业务模块要选「发文流程」，截图里带「选取」的格子要做成数据选取控件、设置照 801 收文导出件。
+
+- **业务模块**：`build_export.patch_skeleton()` 支持 `form.modCode`/`modeDes`/`flowKindID`，
+  同时写进 `FlowSet` 与 `FlowSetVersion`。收文 `docRec`、发文 `docSend`，公文流程 `FlowKindID=17`
+  （普通表单仍是 `wm`/`9`，既有流程行为不变）。
+- **数据选取控件**：`build_forms.py` 新增字段类型 `selectData`（`SheetType:"selectData"`、
+  `buttonType:"selectdata"`、`selDataSet{dataTable,dataMapping,isMutilSelect,filterCondition,orderField}`），
+  结构与 801 导出件逐键一致；`mapTo` 指目标字段，生成时取它的 bindData 当 `MapField`。
+  只在 Web 端出（移动端仍用纯文本），`validate_form.py` 同步放行 `selectData` 与
+  `buttonName`/`selDataSet` 两个键。
+- **补位格**：新增字段类型 `blank`，把一行补齐到最后一列（平台要求封口，不能留空半行）。
+- **公文属性书签**：`build_export.build_bookmarks()` 按 spec 的 `bookmarks` 生成
+  `TemplateData.docUsedBookmarkList`（`Title`/`DocType`/`Urgent`/`Secret`/`AttNum`/`CcGov`/
+  `Keyword`/`Adjunct`/`UserName`/`CDate`，`value:true` 追加 `_Value` 的 `UrgentID`/`SecretID`）；
+  `templateData.isFromFlow` 置 `true`。
+- **公文发文流程重出**：表单按新截图重排（首行「流程选用/办理时限/急件」、8 个选取按钮、
+  相关公文「＋添加」、经办人/起草日期），导出包 `modCode=docSend`、`FlowKindID=17`、书签 12 条。
+- 文档：`references/spec-format.md` 新增「公文流程」小节与 `selectData`/`blank` 字段说明；
+  `references/flow-export.md` 新增「业务模块编码」「公文属性书签」两节；`SKILL.md` 口令段补公文口径。
+
 ## 1.3.3 - 2026-11-28
 
 解析平台导出的 **801 收文流程（2022 年版）**，补上「意见框可不与步骤同名」的绑定能力。

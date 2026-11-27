@@ -296,6 +296,41 @@ python scripts/build_export.py spec.json --base-export "流程导出_模板.json
 3. `ActionTypeID` 老映射：申请人 `-1`、结束 `1`（新包按 0 写，平台按 `node` 判类型，不影响）。
    节点图标也全是绿色（新包按类型配色），`layer` 全 0。
 
+### 0. 业务模块编码（`modCode` / `modeCode` / `modeDes`）
+
+`FlowSet` 与 `FlowSetVersion` 上各有一组：
+
+| 字段 | 801 收文 | 707 普通表单 | 含义 |
+|---|---|---|---|
+| `modCode` | `docRec` | `wm` | **业务模块编码**（收文 = docRec，发文 = docSend） |
+| `modeCode` | `docRec` | `wm` | 同上，平台两处都读 |
+| `modeDes` | `wm` | `wm` | 大类，公文固定 `wm` |
+| `FlowKindID` | `17` | `9` | 流程分类：公文 17、普通表单 9 |
+
+不写就落 `wm`/`9`，导入后流程挂在「通用」下，公文属性（文号/密级/主题词）列表里都不显示。
+
+### 0.1 公文属性书签（`TemplateData.docUsedBookmarkList`）
+
+801 有 14 条，把表单字段绑到公文模块的标准属性：
+
+| BookMark | FormField | 说明 |
+|---|---|---|
+| 公文标题 | `Title` | 流程标题/公文标题 |
+| 公文种类 | `DocType` | |
+| 紧急程度 | `Urgent` | 另有一条 `紧急程度(值)` → `UrgentID`，落 `KM0008_Value` |
+| 密级 | `Secret` | 另有一条 `密级(值)` → `SecretID` |
+| 附件份数 | `AttNum` | |
+| 主题词 | `Keyword` | |
+| 抄送机关 | `CcGov` | |
+| 附件说明 | `Adjunct` | |
+| 登记人/经办人 | `UserName` | |
+| 登记时间 | `CDate` | |
+| 来文字号 | `ZiHao` / 收文编号 `BianHao` | 收文专用 |
+
+结构：`{"BookMark","DataMapOption","DataMapField":"KM00xx","FlowID","FormField","FormOption","ID","IsApprove":false,"IsMain":true,"IsMonitor":false,"ModeRelationID":0}`；
+`_Value` 那条多 `ApproveForName`/`ApproveModCode`/`Descript`/`ModeCode`/`ParentUID` 五个空键。
+生成器按 spec 的 `bookmarks` 出（`value:true` 追加 `_Value`），见 `spec-format.md`。
+
 **两处值得吸收**：
 
 ### 1. 意见框可以和步骤名不同（FlowFormSet）
@@ -322,12 +357,12 @@ python scripts/build_export.py spec.json --base-export "流程导出_模板.json
 **暂不自动写**：`UserID` / `DepID` 是环境内主键，本地拿不到；只写名字能否被平台接受未验证 →
 仍按 R9 在回复里列「建议执行人」清单，让用户在流程设计器里配。
 
-### 公文表单常见控件（当前生成器未支持，09 公文流程若用到要补）
+### 公文表单常见控件（`selectData` 已支持，其余两项待补）
 
 | 业务 | SheetType | buttonType | 关键键 |
 |---|---|---|---|
 | 取号按钮（来文字号「取号」） | `input` | `docword` | `selWordType: "add"`、`bindData` 指向同一字段 |
-| 数据选取（选择来文单位/主题词/科室） | `selectData` | `selectdata` | `selDataSet: {dataTable, filterCondition, dataMapping[{DataField, MapField, Name}]}`，`dataTable` 是目标表名或视图 |
+| 数据选取（选择来文单位/主题词/科室） | `selectData` | `selectdata` | `selDataSet: {dataTable, filterCondition, dataMapping[{DataField, MapField, Name}]}`，`dataTable` 是目标表名或视图。**已在 1.3.4 支持生成**（spec 写 `selectData` 字段） |
 | 时间选择（登记时间，含时分） | `datetimepicker` | `time` | `dateTimeType: "datetime"` |
 
 801 收文单共 15 行 6 列：来文字号（带取号）、来文机关（+选取）、公文标题、收文编号/来文日期/收文日期、

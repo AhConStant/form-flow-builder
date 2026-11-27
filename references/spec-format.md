@@ -42,6 +42,10 @@
 | `base` | 是 | 输出文件前缀，同时是流程标识（如 `01发文流程`） |
 | `title` | 是 | 表单标题 = Web 标题行文字 |
 | `cols` | 否 | Web 视图列数，默认 **6**（平台标准）。源表是 7 列（如「申请人 + 跨4列输入 + 申请科室 + 输入」）时写 `7`，`row` 的 `colspan` 总和不能超过它 |
+| `modCode` | 否 | **业务模块编码**（导出包 `FlowSet.modCode`/`modeCode`）。公文类必写：收文 `docRec`、发文 `docSend`；不写落平台默认 `wm`（通用），公文属性在列表里都不显示 |
+| `modeDes` | 否 | 业务模块大类，默认 `wm`（公文）；收文/发文导出件里都是 `wm` |
+| `flowKindID` | 否 | 流程分类 ID：表单流程 `9`（默认）、**公文流程 `17`**（801 收文导出件实测） |
+| `bookmarks` | 否 | 公文「表单字段 → 公文属性」映射，见下方「公文流程」。`[{"label":"公文标题","formField":"Title","value":false}]`，`value:true` 时另出一条 `KM00xx_Value`（选项字段用） |
 | `fields` | 是 | 字段数组，顺序即表单顺序 |
 | `nodes` | 否 | 流程节点清单，写进 `(配置清单).md` |
 | `graph` | 否 | 显式流程图：`{"nodes":[{"name","type","x","y"}],"edges":[["A","B"],...]}`。节点给了 `x`/`y` 就按坐标排（复杂分支推荐），否则按分层自动布局。与 `flow` 二选一，优先 `graph` |
@@ -103,7 +107,7 @@
 | 键 | 必填 | 说明 |
 |---|---|---|
 | `label` | 是 | 字段名，照抄源文档 |
-| `type` | 是 | 15 类控件之一，或 `static` / `label` |
+| `type` | 是 | 15 类控件之一，或 `static` / `label` / `selectData` / `blank` |
 | `options` | 单选/多选/下拉必填 | 字符串数组，自动转 `[{label,value}]` |
 | `require` | 否 | 单字段覆盖全局必填 |
 | `range` | 否 | 时间范围：写 `true` 时把 `XX起止时间` 自动拆成 `XX开始时间` + 结束控件，中间放原字段名当标题（**不用「至」、结束控件不出标签**，两控件等宽）。字段名含「起止」且类型是 datepicker 时**默认就拆**，不必显式写；写了 `row` 会保留，起止可与科室排进同一行 |
@@ -128,6 +132,15 @@
 | `height` | 否 | 指定该字段所在行的行高（像素），覆盖自动估算；平台实测不够高时用 |
 | `lineHeights` | `static` 用 | 逐行指定高度数组，对应 `text` 每个换行，如 `[28, 54, 54]` |
 | `fullRow` | 否 | 整行：标签占 A 列、控件合并到最后一列（短类型也能整行，如「拟定进修单位」） |
+| `mapTo` | `selectData` 必填 | 选取结果写回哪个字段（写字段名）。生成时取它的 `bindData` 当 `selDataSet.dataMapping[].MapField` |
+| `dataTable` | `selectData` 必填 | 数据源表/视图名：科室用 `priDepartment`、单位通讯录用 `DocUnit`、人员用 `priUser`、主题词用 801 里的 `wx_6TLN4FG3_Form_0000000088` |
+| `dataField` | `selectData` 必填 | 源表里显示的列：科室 `DepName`、单位 `Name`、人员 `UserName`、主题词 `KM0001` |
+| `buttonName` | 否 | 按钮名，默认「选择+目标字段名」（平台把它写进 `chkName`/`approveName`） |
+| `multi` | 否 | 是否多选（`selDataSet.isMutilSelect`），科室/单位/主题词一般 `true` |
+| `filter` | 否 | 过滤条件，默认 `IsDeleted=0` |
+| `orderField` | 否 | 排序字段：科室默认 `pcsortidscope`，其它 `id` |
+| `text` | `selectData` 否 | 单元格显示文字，默认 `选取`（照源表单截图） |
+| `text` | `blank` 否 | 补位空格内容，默认空串。只用于把一行补齐到最后一列（平台要求「封口」，不能留空半行） |
 
 ### table 的 columns[]
 
@@ -144,6 +157,23 @@
 
 > 重复表**每次都要重新向用户要平台表名**；第二段用 `--table-name` + `--web-only` 回填，只出 Web sheet；
 > 不要复用上一张表单的表名，也不要把表名写死在 spec 里。
+
+## 公文流程（09 公文表单截图 → 发文/收文）
+
+公文类表单跟普通表单的差别只有三处，其余照旧：
+
+1. **业务模块**：截图左上角红框是 `发文信息` → 业务模块 = 发文流程，写
+   `"modCode": "docSend"`, `"flowKindID": 17`；若红框是 `收文信息` → `docRec`。
+2. **数据选取控件**：截图里带「选取」按钮的格子，一律写成 `selectData` 字段（不是静态文字）。
+   结构照平台导出件（801 收文流程），落成 `SheetType:"selectData"` + `buttonType:"selectdata"` +
+   `selDataSet{dataTable,dataMapping[{DataField,MapField,MapFieldName,Name}],isMutilSelect,...}`。
+   单元格文字写 `选取`，`bindData` 自己占一个号（平台按格发号，不影响取值）。
+3. **书签映射**：`bookmarks` 写进 `TemplateData.docUsedBookmarkList`，把表单字段绑到公文属性
+   （`Title`/`DocType`/`Urgent`/`Secret`/`AttNum`/`CcGov`/`Keyword`/`Adjunct`/`UserName`/`CDate`），
+   选项字段再加 `value:true` 落一条 `UrgentID`/`SecretID`。
+
+行内摆位：`selectData` 无标签、只占 `colspan` 格；行末空出来的格子用 `blank` 补满
+（如「主题词 + 选取 + blank×2」「主办科室 + 选取 + blank×4」），否则校验报「空半行」。
 
 ## 命令
 

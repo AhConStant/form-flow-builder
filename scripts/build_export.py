@@ -764,6 +764,48 @@ def form_set_ok(steps, web, form=None):
     return (not missing and not extra), missing, extra
 
 
+def build_bookmarks(form, bind_of, flow_id):
+    """公文业务模块的「表单字段 → 公文属性」映射（docUsedBookmarkList）。
+
+    平台导出件（801 收文流程）里这张表把表单字段绑到公文模块的标准字段：
+    `Title`(公文标题) / `DocType`(公文种类) / `Urgent`(紧急程度) / `Secret`(密级) /
+    `AttNum`(附件份数) / `CcGov`(抄送机关) / `Keyword`(主题词) / `Adjunct`(附件说明) /
+    `UserName`(经办人) / `CDate`(起草日期)。
+    select 类字段平台还会再落一条 `_Value`（`UrgentID` / `SecretID`）存选项值。
+
+    spec 写法：
+        "bookmarks": [{"label": "公文标题", "formField": "Title"},
+                      {"label": "紧急程度", "formField": "Urgent", "value": true}]
+    """
+    out = []
+    for i, b in enumerate(form.get("bookmarks") or [], 1):
+        lab = (b.get("label") or "").strip()
+        field = (b.get("formField") or "").strip()
+        bd = bind_of.get(lab)
+        if not lab or not field or not bd:
+            if lab and not bd:
+                print("  ! 书签「%s」在表单里找不到同名字段，已跳过" % lab)
+            continue
+        out.append({
+            "BookMark": lab, "DataMapField": bd, "DataMapOption": lab,
+            "FlowID": flow_id, "FormField": field,
+            "FormOption": b.get("formOption") or lab, "ID": len(out) + 1,
+            "IsApprove": False, "IsMain": True, "IsMonitor": False,
+            "ModeRelationID": 0,
+        })
+        if b.get("value"):      # 选项字段的「值」bookmark（平台照 KM00xx_Value 存选项 ID）
+            out.append({
+                "ApproveForName": "", "ApproveModCode": "",
+                "BookMark": "%s(值)" % lab, "DataMapField": "%s_Value" % bd,
+                "DataMapOption": "%s(值)" % lab, "Descript": "",
+                "FlowID": flow_id, "FormField": "%sID" % field,
+                "FormOption": "%s(值)" % lab, "ID": len(out) + 1,
+                "IsApprove": False, "IsMain": True, "IsMonitor": False,
+                "ModeCode": "", "ModeRelationID": 0, "ParentUID": "",
+            })
+    return out
+
+
 def build_form_set(web, steps, flow_id, form=None, start_id=36000):
     """按 Web 视图生成「表单设置」（FlowFormSet）：每个节点的字段权限清单。
 
@@ -888,6 +930,21 @@ def patch_skeleton(base, form, steps, cons, parts, ids, conditions=None):
     fe["FlowSetVersionPart"]["FlowID"] = flow_id
     fe["FlowSetVersionPart"]["ID"] = ids["version_id"]
 
+    # 业务模块：平台导出件里是 modCode/modeCode（收文=docRec、发文=docSend），
+    # 不写就落到通用 'wm'，公文属性（文号/密级/主题词）在列表里都不显示
+    mc = (form.get("modCode") or "").strip()
+    if mc:
+        md = (form.get("modeDes") or "wm").strip()
+        for blk in (fe["FlowSet"], fe["FlowSetVersion"]):
+            blk["modCode"] = mc
+            blk["modeCode"] = mc
+            blk["modeDes"] = md
+    # 流程分类：平台导出件里表单流程=9、公文流程=17（801 收文实测），公文类要跟着换
+    fk = form.get("flowKindID")
+    if fk:
+        fe["FlowSet"]["FlowKindID"] = fk
+        fe["FlowSetVersion"]["FlowKindID"] = fk
+
     for i, p in enumerate(fe.get("FlowParticipant") or []):
         p["ID"] = ids["part_user"] + i
         p["FlowID"] = flow_id
@@ -952,8 +1009,10 @@ def main(argv):
 
     mobile = (None if (reused_tpl is not None or ext_mobile is not None)
               else build_forms.build_mobile(copy.deepcopy(form), mby, form["require_all"]))
+    web_meta = {}
     web = ext_web if ext_web is not None else (
-        None if pending else build_forms.build_web(copy.deepcopy(form), wtpl, per_row))
+        None if pending else build_forms.build_web(copy.deepcopy(form), wtpl, per_row,
+                                                   meta=web_meta))
 
     ids = {
         "flow_id": a.flow_id, "template_id": a.template_id,
@@ -992,6 +1051,13 @@ def main(argv):
     T["templateData"]["name"] = form["base"]
     T["templateData"]["TemplateID"] = a.template_id
     T["templateData"]["CDate"] = 1795332994980
+    # 公文表单（配了 modCode）才是「流程生成的公文模板」；普通表单平台导出件里是 false
+    T["templateData"]["isFromFlow"] = bool((form.get("modCode") or "").strip())
+    # 公文业务模块的书签映射：表单字段 -> 公文属性（Title/DocType/Urgent…）
+    T["docUsedBookmarkList"] = build_bookmarks(
+        form, web_meta.get("bind") or {}, ids["flow_id"])
+    if T["docUsedBookmarkList"]:
+        print("       · 书签映射 %d 条（公文业务模块）" % len(T["docUsedBookmarkList"]))
     # 视图清单里每个视图都各自存了一份 sheet/template，必须一起替换，
     # 否则会把骨架表单（旧流程）的字段和重复表名带进新包。
     if ext_web is not None:

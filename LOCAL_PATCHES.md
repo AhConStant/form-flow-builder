@@ -377,6 +377,76 @@
 **公文表单未支持控件**（09 用到再补）：`docword` 取号、`selectData` 数据选取（`selDataSet.dataTable` 指向目标表）、
 `datetimepicker` 时间选择（`dateTimeType: "datetime"`）。
 
+## P14 · 公文表单：业务模块 + 数据选取控件 + 公文属性书签
+
+**日期**：2026-11-28　**版本**：1.3.4　**性质**：能力新增（兼容）
+
+**背景**：用户发来 09 公文表单截图（Web 版公文发文稿纸，左上角红框「发文信息」），
+明确三条：①这类截图就是「09 公文表单截图」；②左上角写「发文信息」→ 流程 JSON 的业务模块要选「发文流程」；
+③截图里带「选取」的格子要做成数据选取控件，设置照 801 收文导出件。
+
+**1. 业务模块（`modCode`）**
+
+平台导出件里是 `FlowSet.modCode` / `modeCode` / `modeDes` + `FlowKindID`：
+
+| 流程 | modCode | modeDes | FlowKindID |
+|---|---|---|---|
+| 801 收文 | `docRec` | `wm` | 17 |
+| 707 普通表单 | `wm` | `wm` | 9 |
+| 发文（本次） | `docSend` | `wm` | 17 |
+
+不写就落 `wm`/`9`，导入后流程挂在「通用」下、公文属性列表不显示。
+`docSend` 是从 `docRec` 推的（平台里没有第二个样本），导入后若业务模块显示不对，改 spec 一行即可。
+`FlowKindID=17` 同理（801 是 17，公文类沿用）。
+
+**2. 数据选取控件（`selectData`）**
+
+801 五个选取格的结构（逐键照抄）：
+
+```json
+{"style":8,"text":"选取","buttonType":"selectdata","bindData":"KM00xx","placeholder":"请输入",
+ "buttonName":"选择主办科室","chkName":"…","approveName":"…","options":[],"required":false,
+ "localDep":true,"showSign":false,"onlyShowSelected":false,"imageScale":"scale",
+ "imageOption":"upload","onlySelectData":true,
+ "selDataSet":{"canEditLinkText":false,
+   "dataMapping":[{"DataField":"DepName","DataTpe":"string","IsShowColumn":true,
+                   "MapField":"KM0014","MapFieldName":"主办科室","Name":"主办科室"}],
+   "dataSource":0,"dataTable":"priDepartment","filterCondition":"IsDeleted=0",
+   "isAddToRepeatTable":false,"isMutilSelect":true,"orderField":"pcsortidscope","table":""},
+ "SheetType":"selectData"}
+```
+
+- `text` 写 `选取`（源表单截图里的按钮字），`buttonName` 写「选择XX」；
+- 按钮格**自己占一个 bindData 号**（801 里 `选择来文单位` 是 KM0022，取值仍写 `<MapField>`）；
+- `dataTable` 取值：科室 `priDepartment`、单位 `DocUnit`、主题词 `wx_6TLN4FG3_Form_0000000088`、
+  人员 `priUser`（后两个照 801 推，人员表未实测）；
+- `orderField`：`priDepartment` 用 `pcsortidscope`，其它 `id`。
+
+**3. 补位格（`blank`）**
+
+平台要求每行补到最后一列（否则 `validate_form` 报空半行）。源表单里「主题词」「主办科室」
+的选取按钮在行中间，右边是空白格 → 用 `blank` 补齐，`blank` 只在 Web 出、移动端跳过。
+
+**4. 公文属性书签（`docUsedBookmarkList`）**
+
+801 有 14 条，把表单字段绑到公文模块标准属性。生成器按 spec 的 `bookmarks` 出：
+
+```json
+"bookmarks": [{"label":"公文标题","formField":"Title"},
+              {"label":"紧急程度","formField":"Urgent","value":true}]
+```
+
+`value:true` 会多出一条 `<label>(值)` → `FormField+"ID"`、`DataMapField+"_Value"`。
+
+**5. 公文发文流程重出**
+
+表单按新截图重排 20 行：首行「流程选用 / 办理时限 / 急件」三组、8 个选取按钮、
+「相关公文」右侧「＋添加」、「经办人 / 起草日期」同行。导出包 16 节点 / 27 连线 / 4 条件 /
+书签 12 条 / `modCode=docSend` / `FlowKindID=17`。
+
+**注意**：`docSend`、`priUser`、`ToGov`（主送机关的公文属性字段名）都属推断，
+主送机关暂**没写进书签**（收文没有主送，无样本），等用户确认字段名再补。
+
 ## 无法通过本技能实现的部分（记下来，别再试）
 
 - **流程「权限分配」页（授权对象 / 监控权限 13 项 / 知会权限）不在 `流程导出_*.json` 里**。

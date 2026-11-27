@@ -48,6 +48,7 @@ WEB_BTN = {
     "singleCheckbox": ("checkbox", "singleCheckbox"),
     "approve": ("approve", "approve"),
     "attachment": ("upload", "attachment"),
+    "selectData": ("selectdata", "selectData"),
 }
 CELL_KEYS = {"style", "merge", "text", "buttonType", "bindData", "placeholder", "chkName",
              "approveName", "options", "required", "localDep", "showSign", "onlyShowSelected",
@@ -57,7 +58,9 @@ CELL_KEYS = {"style", "merge", "text", "buttonType", "bindData", "placeholder", 
              # 数字/金额格：小数位、数字格式（￥/RMB）
              "decimal", "displayFormat", "approveDisplayFormat",
              # Web 单元格上的公式/隐藏（与移动视图同名属性，按用户实测要求下沉到 Web）
-             "autoCalc", "hideFormula", "isHidden"}
+             "autoCalc", "hideFormula", "isHidden",
+             # 数据选取按钮（801 收文流程导出件）：按钮名 + 选取数据集
+             "buttonName", "selDataSet"}
 
 # 平台在新版设计器里会把 inputNumDisplay 的 Web 按钮写成 inputnumdisplay（SheetType 仍是 inputNum）
 BT_ALIAS = {"inputNum": {"inputnum", "inputnumdisplay"}}

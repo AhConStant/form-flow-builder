@@ -54,7 +54,8 @@ COLUMN_TYPES = ["input", "textarea", "radio", "checkbox", "singleCheckbox", "sel
 
 # 可以放进自定义行（row）的类型：窄控件 + 静态文字
 ROW_TYPES = {"input", "inputNum", "inputNumDisplay", "sn", "select", "selectDep", "datepicker",
-             "singleCheckbox", "radio", "checkbox", "static"}
+             "singleCheckbox", "radio", "checkbox", "textarea", "static",
+             "selectData", "blank"}
 
 # 「XX起止时间」→ 主表字段拆成 XX开始时间 + 至 + XX结束时间；重复表列拆成相邻两列
 RANGE_RE = re.compile(r"^(?P<pre>.*?)起止(?P<suf>.*)$")
@@ -99,6 +100,7 @@ WEB_BTN = {
     "singleCheckbox": ("checkbox", "singleCheckbox"),
     "approve": ("approve", "approve"),
     "attachment": ("upload", "attachment"),
+    "selectData": ("selectdata", "selectData"),
 }
 # 独占整行的宽字段（static/label = 静态文字，仅 Web 承载）
 WIDE = {"textarea", "approve", "attachment", "radio", "checkbox", "table", "static", "label"}
@@ -458,8 +460,10 @@ def build_mobile(form, mby, require_all):
     out = []
     for f in form["fields"]:
         t = f["type"]
-        if t == "static":
-            continue  # 纯 Web 静态说明（分节标题、表内注）移动端省略
+        if t in ("static", "blank"):
+            continue  # 纯 Web 静态说明（分节标题、表内注）/ 补位空格 移动端省略
+        if t == "selectData":
+            continue  # 数据选取按钮只在 Web 端，移动端仍用纯文本框
         if t not in mby:
             raise ValueError("[%s] 不支持的控件类型: %s（可选: %s）"
                              % (form["base"], t, "/".join(MOBILE_TYPES)))
@@ -553,12 +557,15 @@ def build_web_table_cell(c, bind_table, field_no, ncols):
     return cell
 
 
-def build_web(form, wtpl, per_row):
+def build_web(form, wtpl, per_row, meta=None):
+    """`meta` 传 dict 时回填 `bind`（字段名 → bindData），供书签映射复用。"""
     ncols = table_ncols(form)
     last = ncols - 1
     rows, merges, approves, tables = {"len": 100}, [], [], []
     fixed_heights = {}
     bind = [0]
+
+    bind_of = {}          # 字段名 -> bindData（书签映射要用）
 
     def nb():
         bind[0] += 1
@@ -596,6 +603,7 @@ def build_web(form, wtpl, per_row):
         })
         if fl["token"]:
             c["defaultVal"] = TOKEN_WEB[fl["token"]]
+        bind_of.setdefault(lab, c["bindData"])
         if t == "approve":
             c["approveMode"] = lab
             approves.append({"approveName": lab, "approveMode": lab})
@@ -635,6 +643,60 @@ def build_web(form, wtpl, per_row):
         hide = (f.get("hideWhen") or "").strip()
         if hide:
             c["hideFormula"] = to_formula(hide)
+        return c
+
+    def scell(f, style, merge):
+        """「数据选取」按钮格：结构照平台导出件（801 收文流程）原样落。
+
+        `mapTo` = 目标字段名，取值写回它的 bindData；也可直接写 `mapField`(KM00xx)。
+        其余 `dataTable` / `dataField` / `multi` / `filter` 按字段给，缺省按科室表。
+        """
+        target = f.get("mapTo") or ""
+        tb = bind_of.get(target) or f.get("mapField") or ""
+        tname = f.get("mapFieldName") or target or f["label"]
+        data_table = f.get("dataTable") or "priDepartment"
+        data_field = f.get("dataField") or "DepName"
+        btn = f.get("buttonName") or ("选择%s" % tname)
+        c = {
+            "style": style,
+            "text": f.get("text") or "选取",
+            "buttonType": "selectdata",
+            "bindData": nb(),
+            "placeholder": "请输入",
+            "buttonName": btn,
+            "chkName": btn,
+            "approveName": btn,
+            "options": [],
+            "required": False,
+            "localDep": True,
+            "showSign": False,
+            "onlyShowSelected": False,
+            "imageScale": "scale",
+            "imageOption": "upload",
+            "onlySelectData": True,
+            "selDataSet": {
+                "canEditLinkText": False,
+                "dataMapping": [{
+                    "DataField": data_field,
+                    "DataTpe": "string",
+                    "IsShowColumn": True,
+                    "MapField": tb,
+                    "MapFieldName": tname,
+                    "Name": tname,
+                }],
+                "dataSource": 0,
+                "dataTable": data_table,
+                "filterCondition": f.get("filter") or "IsDeleted=0",
+                "isAddToRepeatTable": False,
+                "isMutilSelect": bool(f.get("multi", False)),
+                "orderField": f.get("orderField")
+                             or ("pcsortidscope" if data_table == "priDepartment" else "id"),
+                "table": "",
+            },
+            "SheetType": "selectData",
+        }
+        if merge:
+            c["merge"] = merge
         return c
 
     def put(ri, cells):
@@ -744,6 +806,21 @@ def build_web(form, wtpl, per_row):
                 cells[ci] = {"style": lab_s, "text": f.get("text") or f["label"]}
                 if span_ > 1:  # 静态文字跨列：必须写合并，否则右侧留无边框填充格
                     cells[ci]["merge"] = [0, span_ - 1]
+                    merges.append("%s%d:%s%d" % (col_letter(ci), r + 1,
+                                                col_letter(ci + span_ - 1), r + 1))
+                ci += span_
+                continue
+            if f["type"] == "blank":
+                cells[ci] = {"style": ctrl_s, "text": f.get("text", "")}
+                if span_ > 1:
+                    cells[ci]["merge"] = [0, span_ - 1]
+                    merges.append("%s%d:%s%d" % (col_letter(ci), r + 1,
+                                                col_letter(ci + span_ - 1), r + 1))
+                ci += span_
+                continue
+            if f["type"] == "selectData":
+                cells[ci] = scell(f, ctrl_s, [0, span_ - 1] if span_ > 1 else None)
+                if span_ > 1:
                     merges.append("%s%d:%s%d" % (col_letter(ci), r + 1,
                                                 col_letter(ci + span_ - 1), r + 1))
                 ci += span_
@@ -883,6 +960,8 @@ def build_web(form, wtpl, per_row):
         # 平台导出件（含流程导出包内嵌的 sheet）末尾带 events；单独导出的 Web 视图没有，两种都认
         "events": "{}",
     }
+    if meta is not None:
+        meta["bind"] = bind_of
     return doc
 
 
@@ -1096,7 +1175,7 @@ def main():
         expand_range_columns(form)                # 重复表列里的起止先拆两列（会改变列数）
         expand_ranges(form, table_ncols(form))    # 再按最终列数拆主表的时间范围
         for f in form["fields"]:
-            if f["type"] not in MOBILE_TYPES and f["type"] != "static":
+            if f["type"] not in MOBILE_TYPES and f["type"] not in ("static", "blank", "selectData"):
                 raise ValueError("[%s] 字段「%s」类型非法: %s" % (form["base"], f["label"], f["type"]))
             if f["type"] == "table" and not f.get("columns"):
                 raise ValueError("[%s] 重复表「%s」缺少 columns（列定义）"
