@@ -320,18 +320,28 @@ def build_conditions(form, steps, code_map, flow_id, start_id, redirect=None, ro
         for i, it in enumerate(items, 1):
             idx_by_dst.setdefault(it["dst"], []).append(i)
         all_idx = list(range(1, len(items) + 1))
+        item_labs = [it["lab"] for it in items]
         for i, did in enumerate(order):
             labs = groups.get(did) or []
             idxs = idx_by_dst.get(did) or []
             if did == alt_dst and not labs:
                 lab = alt_label or "其他"
-                note, desc = "【取反】 %s" % lab, " 【取反】 %s " % lab
-                # 「其他情况」= 所有条件都不成立；条件不止一个时取反也要串起来
-                con = " And ".join("![%d]" % k for k in all_idx)
+                note = "【取反】 %s" % lab
+                # else 兜底若写的是字段枚举里的一个具体取值，应改成显式条件（09 规则 R25）：
+                # 用兜底表达会显示成「【取反】 财务科」，运行时容易误读成排除财务科。
+                if alt_label and not any(w in alt_label for w in
+                                         ("其他", "其它", "错误", "否", "不", "无", "未", "空", "异常")):
+                    warns.append("判断「%s」的 else 出口写作「%s」，像是字段的一个具体取值；"
+                                 "若它确实在枚举内，应写成显式条件而不是兜底（09 规则 R25）"
+                                 % (s["actualName"], alt_label))
+                # 「其他情况」= 所有条件都不成立。多条条件时平台实测写法是
+                # `!([1] or [2] or …)`（小写 or、整体加括号，707 导出件 2026-11-28），
+                # 不是 `![1] And ![2]`；说明文字同步写成「 【取反】（ A 【或者】 B ）」。
                 if len(all_idx) > 1:
-                    warns.append("判断「%s」的「其他情况」出口有 %d 个条件，取反写法『%s』"
-                                 "参照单条取反推得、未实测，导入后请在条件步骤里核对"
-                                 % (s["actualName"], len(all_idx), con))
+                    con = "!(%s)" % " or ".join("[%d]" % k for k in all_idx)
+                    desc = " 【取反】（ %s ）" % " 【或者】 ".join(item_labs)
+                else:
+                    con, desc = "![%d]" % all_idx[0], " 【取反】 %s " % lab
             elif idxs:
                 # 一条边挂多个条件时，ConContent 用 `[1] Or [2]` 串（平台实测写法），
                 # 光留空只写 Desc 的话导入后「条件步骤」是空的、分支不会自动走。
