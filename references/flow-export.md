@@ -27,7 +27,7 @@
 | `node` | 节点类型：`nodeStart` / `nodeFirst` / `nodeApprove` / `nodeEnd` | `nodeApprove` |
 | `nodeStyle` | 画布坐标 `left:460px;top:340px;` | |
 | `processTo` | 后继 `DrawID`（多个用逗号分隔） | `4` |
-| `processPrev` | 前驱 `DrawID` | `2` |
+| `processPrev` | 前驱 `DrawID`，**多个用逗号分隔**（汇聚点写成 `3,5,6`，只写第一条平台会认为别的来线没接上） | `2` |
 | `shuntNext` / `shuntLayer` | 是否分流/分支；非 0 表示有分支 | `0` |
 
 > `stepName` 是模板名（都是「审批」），**名字要用 `actualName`**。
@@ -134,7 +134,9 @@
 ## 分支怎么表达
 - `processTo` 是**逗号分隔的多个 DrawID**（如 `"8,10"`），`importantShunt` 存同一份目标列表；
 - `FlowStepCon` 里对应有两条连线，`tabCode` 都是源节点的类型（`nodeJudge`）；
-- **`ConContent` 为空 = 这条分支没有引用条件项**（`StepCondition` 里没配，或条件项 ≥ 2 平台就不写它）。
+- **`ConContent` 为空 = 这条分支没有引用条件项**：平台「条件步骤」是空的，运行时不会自动分流
+  （2026-11-27 用户反馈「条件因子有了、条件步骤没生成」就是这里空着）。一条边挂多个条件时
+  **按 `[1] Or [2]` 串起来**，不能留空——留空时 `ConContentDesc` 只是显示文字，不参与判断。
   判断节点只做分流、没设条件表达式时两条分支全空，画图时**不要自己编「是/否」标签**，
   直接在输出里提示「分支条件为空」。要让它导入即能跑，就在 spec 里给判断节点写 `conditions`（见下）。
 - 判断分支的连线文字（`FlowStepCon.note`）取值顺序：`graph.edgeLabels`（手写）→ 折叠掉的执行动作步骤名 →
@@ -143,7 +145,7 @@
   同一个判断里不能一条写全句、另一条写「是」，那是自相矛盾（用户 2026-11-26 指出）。
   实现见 `build_export.build_steps()` 里的 `named_branch`。
 
-### StepCondition：判断条件（2026-11-27 实测 422 导出件）
+### StepCondition：判断条件（2026-11-27 实测 422 / 403 导出件）
 
 平台把判断规则存在 `FlowExportData.StepCondition`（35 键，一行 = 一个条件项），**与连线 `ConContent` 的 `[n]` 对应**：
 
@@ -164,15 +166,19 @@
 三种右值实测都有实例：`ListVariable`（选项值，最常用）、`ConstantVariable`（`leftVarCode=0`、
 `leftVarName=<@%Int://0@>`、`compareType=lt`）、`SQLVariable`（`rightVarCode` 存整段 SQL，数角色条数）。
 
-连线侧两种写法：
+连线侧写法（2026-11-27 实测 403 平台件）：
 
 | 场景 | `ConContent` | `ConContentDesc` |
 |---|---|---|
-| **只有一个条件项** | `[1]` / `![1]`（取反） | ` 是 ` / ` 【取反】 是 ` |
-| **条件项 ≥ 2** | **留空** | 各值文本用「 / 」连（`护理人员 / 行政后勤人员`） |
+| 一条边挂 **1 个**条件 | `[3]` | ` 新入职初次添加权限 ` |
+| 一条边挂 **多个**条件 | `[1] Or [2]`（` Or ` 分隔，顺序=jIdentity） | 各值用「 【或者】 」连：` 遗失 【或者】 损坏（…） ` |
+| 取反支（else / 否） | `![1]`（多条件时推得 `![1] And ![2]`，未实测） | ` 【取反】 是 ` |
+| 没有条件（人工选分支） | 空 | 分支文字 |
 
-多条件时平台不写 `ConContent`（一条连线只能引用一个 jIdentity），靠 Desc 文本对齐——照抄即可，
-**别自作聪明给每支都写 `[2]` `[3]`**。
+`ConContent` 是**真正的判断表达式**，`ConContentDesc` 只是画布/详情里给人看的文字。
+早前从 422 导出件得出「条件项 ≥2 就留空」是错的——那份是生成器自己的产物被导回来，
+用户在平台里手工点完「条件步骤」再导出（403 件）才露出真实写法 `[1] Or [2]`。
+`FlowStepCon.note` 不受影响，多条件仍可写「A / B」。
 
 spec 侧写法见 `spec-format.md` 的「判断条件」；`build_export.build_conditions()` 负责生成条件行与连线文字，
 `flow_types.expand_conditions()` 负责把 `conditions[].to` 补成边并按条件顺序排出线顺序。
@@ -247,7 +253,7 @@ spec 侧写法见 `spec-format.md` 的「判断条件」；`build_export.build_c
 ## FlowStepCon / FlowStepPart / 其余分节
 
 - `FlowStepCon.tabCode` = **源节点的类型**（`nodeStart`/`nodeFirst`/`nodeApprove`），`DrawID → NextDrawID` 连线；
-  `ConContent` 为空 = 无条件分支。
+  `ConContent` 为空 = 无条件分支（人工选分支；有条件的判断必须写 `[n]` / `[n] Or [m]`）。
 - `FlowStepPart` 每个 StepID 一条，放节点级高级设置（超时、回填、签名等），键比 FlowStep 少。
 - `FlowParticipant`（`所有人` / `流程发起人`）与 `FlowExtraOperation`（附件权限）是**流程级**的，不带 StepID。
 

@@ -83,9 +83,10 @@
 
 注意事项：
 
-- **条件项 ≥ 2 时连线 `ConContent` 留空**、`ConContentDesc` 用「 / 」拼各值（平台导出件就是这个写法），不要手工写 `[1]`；
+- **一条边挂多个条件时 `ConContent` 写 `[1] Or [2]`**（按 jIdentity 顺序用 ` Or ` 连），`ConContentDesc` 各值用「 【或者】 」连；
+  **别留空**——留空等于平台「条件步骤」没绑，分支不会自动走（用户 2026-11-27 反馈）；
 - `to` 写了但 `edges` 里没写这条边，生成器会自动补边，并按条件顺序排出线顺序；
-- 用户用 `edgeLabels` 显式写了文字的分支优先，条件不覆盖它；
+- 用户用 `edgeLabels` 显式写了文字的分支，文字保留、`ConContent` 仍由条件补上；
 - 条件要字段码（`KM0012_Value`），**必须有 Web 视图**才生成；只出移动视图那次跑不出来（会告警）；
 - 参考实现：`references/flow-export.md` 的「StepCondition」一节。
 

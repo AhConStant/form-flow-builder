@@ -131,7 +131,7 @@
 | 条件项数 | 连线 `ConContent` | `ConContentDesc` |
 |---|---|---|
 | 1 个 | `[1]` / `![1]`（取反） | ` 是 ` / ` 【取反】 是 ` |
-| ≥ 2 个 | **留空** | 各值文本用「 / 」连 |
+| ≥ 2 个 | ~~留空~~ → 见 P6：`[1] Or [2]` | 各值文本用「 / 」连（P6 改为「 【或者】 」） |
 
 条件行 35 键，左值 `FormVariable`（`KM0004_Value` + `<%#myField\人员类别(值)%>`），右值 `ListVariable` / `ConstantVariable` / `SQLVariable`。
 
@@ -171,6 +171,40 @@
 
 **验收口径**：有 `conditions` 的判断，`StepCondition` 条数 = 条件值个数；只有 1 条时出线 `ConContent` 为 `[1]`/`![1]`，
 否则为空且 Desc 用「 / 」连；`FlowSet.isValidate == true`；流程图判断出线显示条件文字而非执行动作名。
+
+## P6 · 条件步骤 ConContent 必须写全 + processPrev 全前驱（2026-11-27）
+
+**需求来源**：用户把 403 胸牌流程导进平台后反馈「条件因子设置有了，但条件步骤设置还是没有生成」，
+导出的 `流程导出_403胸牌申办、补办及门禁权限申请流程_v1.0.json` 里能看到平台真实写法。
+逐字段比对：`StepCondition` 35 键**完全一致**，只有两处不同 →
+
+1. **连线 `ConContent` 空着**。P5 里按 422 件得出的「条件项 ≥2 就留空」是**错的**——
+   422 那份是我们自己的产物被导回去，平台只是照抄。403 件里用户在平台点完「条件步骤」后，
+   平台写的是 `[1] Or [2]` / `[3]` / `[4] Or [5]`，Desc 也从「 / 」变成了「 【或者】 」。
+   → `ConContent` 是**真正的判断表达式**，留空 = 条件步骤没绑、分支不会自动走；
+   `ConContentDesc` 只是显示文字。
+2. **`processPrev` 只写了第一条前驱**（汇聚点 `2` 应为 `2,4`、`14` 应为 `14,17`）。
+   平台导出件里是**全部前驱逗号分隔**（`3,5,6`），少写平台会认为其它来线没接上。
+
+**补丁位置**
+
+1. `scripts/build_export.build_conditions()`
+   - 先记下每个条件项的序号（`jIdentity` 的 `[n]`），按出线归组：
+     一条边一个条件 → `[3]`；多个 → `" Or ".join("[n]")`；取反支 → `![n]`
+     （多条件的「其他情况」按单条取反推得 `![1] And ![2]`，**未实测**，会打告警让用户核对）。
+   - `ConContentDesc` 多条件用 `" 【或者】 "` 连接，单条件仍是 ` 条件名 `。
+   - 两条出线的是非判断、没写 `else` 时，第二支仍写 `![1]`（保持原行为）。
+2. `scripts/build_export.build_steps()`
+   - `prev` 改成 `sorted({...})` 全集，`processPrev = ",".join(...)`。
+   - 用户 `edgeLabels` 写了分支文字时：**文字保留，但 `ConContent` 仍由条件补上**
+     （原来整条跳过，导致「护理人员 / 行政后勤人员」那支条件绑不上）。
+3. `assets/flow_export_skeleton.json`：`FlowSet` / `FlowSetVersion` 补 `flowCode` / `udfName` 两个空键
+   （平台导出件有，键序按字母序），整包键集合与平台件对齐。
+4. 文档：`references/flow-export.md`（ConContent 表 + processPrev）、`references/spec-format.md`、`SKILL.md` 同步改正。
+
+**验收口径**：与平台件逐字段比对，除 ID / 视图 HTML / 时间戳外**零差异**；
+`胸牌` 判断边为 `[1] Or [2]` `[3]` `[4] Or [5]`；`权限` 为 `[1]` `[2] Or [3]` `![1]`。
+脚本化自检：每条 `processPrev` == 所有入边源 DrawID 升序逗号串。
 
 ## 无法通过本技能实现的部分（记下来，别再试）
 

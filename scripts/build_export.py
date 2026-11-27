@@ -179,10 +179,12 @@ def _cond_label(value, given=""):
 def build_conditions(form, steps, code_map, flow_id, start_id, redirect=None, rows=None):
     """judge.conditions → StepCondition 列表 + 每条出线的文字/ConContent。
 
-    平台规则（实测 422 导出件）：
-    - **只有一个条件项**的判断，两条出线写 `[1]` / `![1]`（后者即 else 取反）；
-    - **多个条件项**时连线 ConContent 留空，靠 ConContentDesc 的文本按「 / 」对齐，
-      所以同一出口的多个条件在 Desc 里用「 / 」连起来；
+    平台规则（实测 422 / 403 导出件）：
+    - 出线的 `ConContent` 写「条件因子」的编号：一条边挂一个条件写 `[3]`，
+      挂多个就按 ` Or ` 串起来（`[1] Or [2]`）；不成立的那支写 `![n]`（取反）。
+      **不能留空**——留空时平台只把 Desc 当显示文字，条件步骤是空的，分支不会走。
+    - `ConContentDesc` 是显示文字（带前后空格）：多个条件用「 【或者】 」连，
+      单条件直接是条件名；取反支是「 【取反】 是 」。
     - 条件的目标写成执行动作（图上折叠掉的那种）也能穿透到它的后继节点。
     出线一律按**绘图号**配对（actualName 允许重名，如三条分支都叫「科主任审批」）。
     返回 (条件列表, {(判断绘图号, 目标绘图号): (note, desc, ConContent)}, 告警)。
@@ -234,32 +236,45 @@ def build_conditions(form, steps, code_map, flow_id, start_id, redirect=None, ro
                 break
         if not node:
             continue
-        items = []                       # 一个值一项：{v, dst, lab, op, left, field}
+        items = []                       # 一个值一项：{v, dst, lab, op, left, field, sql}
         for c in node.get("conditions") or []:
             if not isinstance(c, dict):
                 continue
             field = c.get("field") or c.get("left")
             to = c.get("to")
-            if not field or not to:
+            sql = c.get("sql")           # 表单字段表达不了的判断：左常量 vs 右 SQL 计数
+            if not to or (not field and not sql):
                 warns.append("判断「%s」有条件缺 field/to，已跳过" % s["actualName"])
                 continue
-            left, _st = _left_of(field, code_map, s["actualName"])
-            if not left:
-                continue
+            if sql:
+                const = c.get("const", 0)
+                left = {"type": "ConstantVariable", "code": str(const),
+                        "name": "<@%%Int://%s@>" % const, "desc": "常量变量：%s" % const,
+                        "details": "Int"}
+            else:
+                left, _st = _left_of(field, code_map, s["actualName"])
+                if not left:
+                    continue
             dst = resolve(to, s["actualName"])
             if dst is None:
                 continue
             op = c.get("op") or c.get("compareType")
-            for v in _cond_values(c.get("value")):
+            vals = _cond_values(c.get("value")) or (
+                [c.get("label") or c.get("note") or "SQL条件"] if sql else [])
+            for v in vals:
                 items.append({"v": v, "dst": dst,
                               "lab": _cond_label(v, c.get("label") or c.get("note")),
-                              "op": op, "left": left, "field": field})
+                              "op": op, "left": left, "field": field, "sql": sql})
         if not items:
             continue
         # 写条件行：一个值 = 一条 jIdentity
         for i, it in enumerate(items, 1):
             rec = cond_blank()
-            right = _right_of(it["v"], it["field"], it["left"])
+            if it.get("sql"):
+                right = {"type": "SQLVariable", "code": it["sql"], "name": "",
+                         "desc": "SQL变量：【%s】" % it["sql"], "details": "Str"}
+            else:
+                right = _right_of(it["v"], it["field"], it["left"])
             rec.update({
                 "DrawID": s["DrawID"], "FlowID": flow_id,
                 "ID": start_id + len(conds_out), "StepID": s["StepID"],
@@ -294,25 +309,50 @@ def build_conditions(form, steps, code_map, flow_id, start_id, redirect=None, ro
         for did in groups:
             if did not in order:
                 order.append(did)
-        single = len(items) == 1
+        # 单条件 + 两支、又没写 else：另一支就是取反，也要进 order 才能写 `![1]`
+        outs = [int(x) for x in str(s.get("processTo") or "").split(",") if x.strip().isdigit()]
+        if len(items) == 1 and alt_dst is None and len(outs) == 2:
+            for d in outs:
+                if d not in order:
+                    order.append(d)
+        # 每条出线上的条件序号 = jIdentity 里的编号（一个值一项，按条件书写顺序）
+        idx_by_dst = {}
+        for i, it in enumerate(items, 1):
+            idx_by_dst.setdefault(it["dst"], []).append(i)
+        all_idx = list(range(1, len(items) + 1))
         for i, did in enumerate(order):
-            labs = groups[did]
+            labs = groups.get(did) or []
+            idxs = idx_by_dst.get(did) or []
             if did == alt_dst and not labs:
                 lab = alt_label or "其他"
                 note, desc = "【取反】 %s" % lab, " 【取反】 %s " % lab
+                # 「其他情况」= 所有条件都不成立；条件不止一个时取反也要串起来
+                con = " And ".join("![%d]" % k for k in all_idx)
+                if len(all_idx) > 1:
+                    warns.append("判断「%s」的「其他情况」出口有 %d 个条件，取反写法『%s』"
+                                 "参照单条取反推得、未实测，导入后请在条件步骤里核对"
+                                 % (s["actualName"], len(all_idx), con))
+            elif idxs:
+                # 一条边挂多个条件时，ConContent 用 `[1] Or [2]` 串（平台实测写法），
+                # 光留空只写 Desc 的话导入后「条件步骤」是空的、分支不会自动走。
+                note = labs[0] if len(labs) == 1 else " / ".join(labs)
+                desc = " %s " % " 【或者】 ".join(labs)
+                con = " Or ".join("[%d]" % k for k in idxs)
             else:
-                lab = labs[0] if single else " / ".join(labs)
-                note, desc = lab, " %s " % lab
-            con = ""
-            if single:
-                if did == alt_dst:
-                    con = "![1]"
-                elif alt_dst is None and len(order) == 2 and i == 1:
-                    con = "![1]"
-                    note, desc = "【取反】是", " 【取反】 是 "
-                else:
-                    con = "[1]"
+                note, desc, con = "", "", ""
+            # 单条件 + 两支、又没写 else：第二支就是取反（沿用平台 `![1]` 写法）
+            if len(items) == 1 and alt_dst is None and len(order) == 2 and i == 1:
+                con = "![%d]" % (idxs[0] if idxs else all_idx[0])
+                note, desc = "【取反】是", " 【取反】 是 "
             edge_text[(s["DrawID"], did)] = (note, desc, con)
+        # 自检：有条件的判断，每条出线都该绑上条件；漏一条平台里就要人工选分支
+        outs = [int(x) for x in str(s.get("processTo") or "").split(",") if x.strip().isdigit()]
+        missing = [d for d in outs
+                   if not (edge_text.get((s["DrawID"], d)) or ("", "", ""))[2]]
+        if missing:
+            warns.append("判断「%s」有 %d 条出线没绑条件（Draw %s），平台里要人工选分支"
+                         % (s["actualName"], len(missing),
+                            "、".join(str(d) for d in missing)))
     return conds_out, edge_text, warns
 
 
@@ -449,7 +489,7 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
         at = (meta["action_type"] if meta["action_type"] is not None
               else flow_types.TYPE_META["notice"]["action_type"])
         draw = r["draw"]
-        prev = [p["draw"] for p in rows if draw in (p.get("to") or [])]
+        prev = sorted({p["draw"] for p in rows if draw in (p.get("to") or [])})
         step = copy.deepcopy(defaults["step"])
         icon = {"nodeStart": "green", "nodeEnd": "orange"}.get(node, "purple")
         step.update({
@@ -459,7 +499,9 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
             "nodeIcon": "%s el-icon-success i ep:success-filled " % icon,
             "nodeStyle": "left:%dpx;top:%dpx;" % (int(r["x"]), int(r["y"])),
             "processTo": ",".join(str(t) for t in r["to"]),
-            "processPrev": str(prev[0]) if prev else "",
+            # processPrev 是「所有前驱」的绘图号，逗号分隔（平台导出件里汇聚点就是 3,5,6），
+            # 只写第一条会让平台认为其它来线没接上。
+            "processPrev": ",".join(str(p) for p in prev),
             # optStep：平台对所有非判断步骤都写 "1"（判断节点为空串）。
             # importantShunt：该步骤「同意执行」的默认目标 = 下一步的绘图号；
             # 多条出线按出线顺序逗号分隔（判断节点就是各分支），没有出线（结束）为空。
@@ -539,9 +581,13 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
         for c in cons:
             key = (c["DrawID"], c["NextDrawID"])
             hit = cond_text.get(key)
-            if not hit or key in explicit:      # 显式 edgeLabels 优先，条件不覆盖
+            if not hit:
                 continue
             note, desc, con = hit
+            if key in explicit:      # 用户 edgeLabels 的文字优先，但条件绑定必须补上
+                if con:
+                    c["ConContent"] = con
+                continue
             c["note"], c["ConContentDesc"], c["ConContent"] = note[:200], desc, con
     return steps, cons, parts, rows, warns, conditions
 
