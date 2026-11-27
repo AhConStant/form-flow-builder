@@ -337,6 +337,46 @@
 即使几条线汇到同一个目标，那个值也要有自己的一条条件——否则导出件里显示成「【取反】 财务科」，
 看流程的人会理解成「排除财务科」。
 
+## P13 · 意见框可与步骤名不同（`formField`）+ 801 收文流程解析
+
+**日期**：2026-11-28　**版本**：1.3.3　**性质**：能力新增（兼容）
+
+**背景**：用户给了一份平台导出的 `801收文流程(2022年版)_v1.0.json`，说「后面给 09 公文流程时按这个规则生成」。
+解析发现它带 **2 条 `FlowFormSet`**（此前所有包都是空的，只能手工绑）：
+
+| Draw | 步骤名 | fieldCode / fieldName | 说明 |
+|---|---|---|---|
+| 3 | 医院办公室拟办意见（审批） | 医院办公室拟办意见 | 与步骤同名 |
+| 5 | 各院领导阅知、责任科室阅办（**通知**） | **传阅意见** | 不同名，且表单 sheet 里没有这个控件 |
+
+→ 结论：`FlowFormSet.fieldCode` 是**流程意见字段名**，不要求表单有同名控件，也不要求等于步骤名；
+通知节点同样能绑。
+
+**改动**：
+- 新增 `declared_form_fields(form)`：读 `graph.nodes[].formField` → `{actualName: 意见框名}`。
+- `form_set_ok(steps, web, form=None)`：声明过的节点不再要求表单里有同名意见框；
+  有声明时不再因「表单多出别的意见框」判不通过。
+- `build_form_set()`：`fix = declared.get(actualName)` 优先，其次 `match_opinion()`；
+  `code_of.get(title, title)` 兜底（声明了但表单没有 → fieldCode 就用名字，与 801 一致）。
+- 回归：707 重跑，17 条件 / 50 连线 / ConContent 全一致（它不生成 FlowFormSet，行为不变）。
+
+**801 其余观察（不照抄）**：
+- 执行动作保留成 `nodeAction`（ActionTypeID=4）——与本项目 R15（折叠）冲突，以 R15 为准；
+- `optStep` 只有审批写 "1"；`ActionTypeID` 老映射（申请人 -1、结束 1）；`layer` 全 0；图标全绿；
+- 节点配置字段与现行骨架只差平台默认值（`singleApprove` 10→0、`agentOneFinishedNotify` 0→9 等），无业务信息。
+
+**FlowParticipant 结构**（801 有 5 条节点执行人）：
+```json
+{"StepID":510,"DrawID":3,"partOptionCode":"LeaderOfDept","partOptionName":"某部门负责人",
+ "description":"某部门负责人：医院办公室（采购办）","DepID":72,"depName":"医院办公室（采购办）","tabCode":"FixedUser"}
+{"StepID":511,"DrawID":4,"partOptionCode":"User","partOptionName":"用户",
+ "description":"具体某个用户：张霞","UserID":1004,"userName":"张霞","tabCode":"FixedUser"}
+```
+`UserID`/`DepID` 是环境内主键，本地拿不到；只写名字能否被平台接受未验证 → 暂不自动写，仍列清单让用户配。
+
+**公文表单未支持控件**（09 用到再补）：`docword` 取号、`selectData` 数据选取（`selDataSet.dataTable` 指向目标表）、
+`datetimepicker` 时间选择（`dateTimeType: "datetime"`）。
+
 ## 无法通过本技能实现的部分（记下来，别再试）
 
 - **流程「权限分配」页（授权对象 / 监控权限 13 项 / 知会权限）不在 `流程导出_*.json` 里**。

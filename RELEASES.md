@@ -6,6 +6,24 @@
 - 次版本：新增能力、新增参考文档、兼容现有用法。
 - 修订号：缺陷修复、脚本稳定性、规则补充。
 
+## 1.3.3 - 2026-11-28
+
+解析平台导出的 **801 收文流程（2022 年版）**，补上「意见框可不与步骤同名」的绑定能力。
+
+- `build_export.py` 新增 `graph.nodes[].formField`：指定该节点绑哪个意见框，允许与步骤名不同、
+  也允许绑表单里没有的流程意见字段（801 实测：`各院领导阅知、责任科室阅办` → `传阅意见`）。
+  不写 `formField` 时行为与 1.3.2 完全一致（步骤名全等/宽松匹配，R23）。
+- `form_set_ok()` 增加 `form` 参数：有显式声明时，不再因「表单里多出别的意见框」判不通过。
+- `references/flow-export.md` 新增「公文类流程实例（801 收文流程）」：7 节点结构、两份 FlowFormSet、
+  FlowParticipant 的 `FixedUser` 节点执行人结构（`LeaderOfDept`/`User` + DepID/UserID）、
+  公文表单三种未支持控件（`docword` 取号 / `selectData` 数据选取 / `datetimepicker` 时间选择）。
+- 澄清 `FlowParticipant` 有两类：附件作者（流程级）与**节点执行人**（`tabCode: FixedUser`，带 StepID/DrawID）；
+  后者暂不自动写（DepID/UserID 是环境主键），仍按 R9 列清单让用户在设计器配。
+- `SKILL.md`、`references/spec-format.md` 补 `formField` 说明。
+
+**注意**：801 是老版本流程（2022 年），其「执行动作保留成节点 / optStep 只给审批 / 申请人 ActionTypeID=-1」
+是历史特征，**不覆盖** R15（执行动作必须折叠）与现行键值写法。
+
 ## 1.3.2 - 2026-11-28
 
 按平台导出件校准判断条件写法：**多条取反 `!([1] or [2] …)`、一值一条件（R25）**。

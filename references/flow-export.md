@@ -12,7 +12,7 @@
 |---|---|---|
 | `FlowStep` | list | 节点数组，一个元素 = 画布上一个节点 |
 | `FlowStepCon` | list | 连线（含条件、按钮文案） |
-| `FlowParticipant` | list | 各节点审批人范围（可选，画图不用） |
+| `FlowParticipant` | list | 附件作者（流程级）+ **各节点执行人**（`tabCode: FixedUser`，带 StepID/DrawID） |
 
 ## FlowStep 里要用的字段
 
@@ -255,7 +255,9 @@ spec 侧写法见 `spec-format.md` 的「判断条件」；`build_export.build_c
 - `FlowStepCon.tabCode` = **源节点的类型**（`nodeStart`/`nodeFirst`/`nodeApprove`），`DrawID → NextDrawID` 连线；
   `ConContent` 为空 = 无条件分支（人工选分支；有条件的判断必须写 `[n]` / `[n] Or [m]`）。
 - `FlowStepPart` 每个 StepID 一条，放节点级高级设置（超时、回填、签名等），键比 FlowStep 少。
-- `FlowParticipant`（`所有人` / `流程发起人`）与 `FlowExtraOperation`（附件权限）是**流程级**的，不带 StepID。
+- `FlowParticipant` 有两种：**附件作者**（`tabCode: ExtraOperation_AttachAuthor`，`所有人` / `流程发起人`，不带 StepID）
+  与**节点执行人**（`tabCode: FixedUser`，带 StepID / DrawID，见下方「公文类流程实例」）；
+  `FlowExtraOperation`（附件权限）是流程级的。
 
 ## 用法
 
@@ -272,6 +274,65 @@ python scripts/build_export.py spec.json --base-export "流程导出_模板.json
 
 前两条产出的 SVG 应当**逐字节一致**；`build_export.py` 生成完会自动把包里的 `sheet`
 和 `elements` 抽出来重新过一遍校验器，再核对流程图节点数——自检不过会返回非 0。
+
+## 公文类流程实例（801 收文流程 2022 年版，用户 2026-11-28 提供）
+
+规模：7 节点 / 6 连线 / 0 判断 / 0 条件，纯线性。
+
+| Draw | actualName | node | ActionTypeID | 执行人（FlowParticipant） |
+|---|---|---|---|---|
+| 1 | 开始 | nodeStart | 0 | — |
+| 2 | 申请人 | nodeFirst | -1 | — |
+| 3 | 医院办公室拟办意见 | nodeApprove | 2 | 某部门负责人：医院办公室（采购办） |
+| 4 | 分发各院领导、责任科室 | nodeNotice | 3 | 张霞 / 曾慧燕 / 林艳仙（3 个具体用户） |
+| 5 | 各院领导阅知、责任科室阅办 | nodeNotice | 3 | 某部门负责人：医院办公室（采购办） |
+| 6 | 归档 | nodeAction | 4 | — |
+| 7 | 结束 | nodeEnd | 1 | — |
+
+**三个「老版本特征」，不要照抄**：
+
+1. 执行动作保留成 `nodeAction`（`ActionTypeID=4`）——本项目 R15 要求折叠（用户 2026-11-26 两次强调），冲突时以 R15 为准。
+2. `optStep` 只有审批节点写 `"1"`，开始/申请人/通知/结束都是空串。
+3. `ActionTypeID` 老映射：申请人 `-1`、结束 `1`（新包按 0 写，平台按 `node` 判类型，不影响）。
+   节点图标也全是绿色（新包按类型配色），`layer` 全 0。
+
+**两处值得吸收**：
+
+### 1. 意见框可以和步骤名不同（FlowFormSet）
+
+801 两条绑定：`医院办公室拟办意见`（与步骤同名）、`各院领导阅知、责任科室阅办` → **`传阅意见`**（不同名）。
+后者节点类型是**通知**，且表单 sheet 里**没有**「传阅意见」这个控件 —— 说明 `FlowFormSet.fieldCode`
+是流程意见字段名，不要求表单里有同名控件。
+
+→ 生成器已支持：spec 节点写 `"formField": "传阅意见"` 即可显式绑定（不写仍按步骤名全等/宽松匹配，R23）。
+显式声明后，`form_set_ok()` 不再因「表单里有别的意见框」而判不通过。
+
+### 2. 节点执行人可以写进包（FlowParticipant）
+
+```json
+{"StepID": 510, "DrawID": 3, "partOptionCode": "LeaderOfDept", "partOptionName": "某部门负责人",
+ "description": "某部门负责人：医院办公室（采购办）",
+ "DepID": 72, "depName": "医院办公室（采购办）", "depLevel": 1, "tabCode": "FixedUser"}
+{"StepID": 511, "DrawID": 4, "partOptionCode": "User", "partOptionName": "用户",
+ "description": "具体某个用户：张霞", "UserID": 1004, "userName": "张霞", "tabCode": "FixedUser"}
+```
+
+`partOptionCode` 枚举：`AllUser` / `Initiator`（附件作者）、`LeaderOfDept` / `User`（节点执行人；
+部门负责人用 `DepID` + `depName`，具体用户用 `UserID` + `userName`）。
+**暂不自动写**：`UserID` / `DepID` 是环境内主键，本地拿不到；只写名字能否被平台接受未验证 →
+仍按 R9 在回复里列「建议执行人」清单，让用户在流程设计器里配。
+
+### 公文表单常见控件（当前生成器未支持，09 公文流程若用到要补）
+
+| 业务 | SheetType | buttonType | 关键键 |
+|---|---|---|---|
+| 取号按钮（来文字号「取号」） | `input` | `docword` | `selWordType: "add"`、`bindData` 指向同一字段 |
+| 数据选取（选择来文单位/主题词/科室） | `selectData` | `selectdata` | `selDataSet: {dataTable, filterCondition, dataMapping[{DataField, MapField, Name}]}`，`dataTable` 是目标表名或视图 |
+| 时间选择（登记时间，含时分） | `datetimepicker` | `time` | `dateTimeType: "datetime"` |
+
+801 收文单共 15 行 6 列：来文字号（带取号）、来文机关（+选取）、公文标题、收文编号/来文日期/收文日期、
+公文种类/紧急程度/密级、附件份数、抄送机关、主题词（+选取）、主办/协办/阅文科室（各带选取）、
+附件说明、登记人/登记时间、附件文件（`uploadMode: "swfj"`）。
 
 ## 限制
 

@@ -72,6 +72,22 @@ def strip_element(el):
     return out
 
 
+def declared_form_fields(form):
+    """spec 节点上的 `formField` → {节点 actualName: 意见框名}。
+
+    平台允许「节点名 ≠ 意见框名」直接绑定（801 收文流程 2026-11-28 实测：
+    `各院领导阅知、责任科室阅办` 绑的是 `传阅意见`，且表单里没有这个控件）。
+    节点上写 `formField` 就按它绑；不写仍按步骤名全等/宽松匹配（R23）。
+    """
+    out = {}
+    for n in (form.get("graph") or {}).get("nodes") or []:
+        if isinstance(n, dict) and n.get("formField"):
+            nm = (n.get("label") or strip_no(n.get("name") or "")).strip()
+            if nm:
+                out[nm] = str(n["formField"]).strip()
+    return out
+
+
 def strip_no(name):
     """去掉步骤名前的层级序号（1、5.1、5.1.1.1 …）。
 
@@ -721,7 +737,7 @@ def _strip_people(name):
     return re.sub(r"[（(][^（()）]*[)）]\s*$", "", n).strip()
 
 
-def form_set_ok(steps, web):
+def form_set_ok(steps, web, form=None):
     """表单设置只在「意见框标题 == 流程步骤名称」时才生成。
 
     用户口径：标题描述与步骤名不一样时**不做表单设置**（绑也是绑错的，
@@ -736,12 +752,15 @@ def form_set_ok(steps, web):
         return out
 
     boxes = uniq(_strip_people(t) for t, _ in opinion_boxes(web))
+    declared = declared_form_fields(form or {})
     # 同一个意见框可以被多个节点复用（院长书记审批在源流程里出现 18 次），
     # 所以按「去重后的名字集合」比，而不是按节点个数比
     names = uniq(_strip_people(s.get("actualName"))
                  for s in steps if s.get("node") in ("nodeApprove", "nodeNotice"))
-    missing = [n for n in names if n not in boxes]
-    extra = [b for b in boxes if b not in names]
+    # 节点上显式写了 formField 的，不再要求表单里有同名意见框（可以是流程意见字段）
+    missing = [n for n in names if n not in boxes and n not in declared]
+    # 有显式声明时，「表单里多出来的意见框」不算冲突——可能就是这个声明在用它
+    extra = [] if declared else [b for b in boxes if b not in names]
     return (not missing and not extra), missing, extra
 
 
@@ -815,20 +834,23 @@ def build_form_set(web, steps, flow_id, form=None, start_id=36000):
             if v:
                 add(dr, sid, code + v[0], name + v[1], parent)
 
+    declared = declared_form_fields(form or {})
     for s in steps:                        # 审批节点绑定自己的意见框（按标题识别）
         if s.get("node") not in ("nodeApprove", "nodeNotice"):
             continue
-        title = match_opinion(s["actualName"], boxes)
+        fix = declared.get(s["actualName"])   # spec 显式指定优先（允许与步骤名不同）
+        title = fix or match_opinion(s["actualName"], boxes)
         if not title:
             if s.get("node") == "nodeApprove":
                 print("  ! 审批节点「%s」找不到对应意见框，未生成表单设置（审批走平台处理签）"
                       % s["actualName"])
             continue
-        if s.get("node") == "nodeNotice" and _opinion_core(title) != _opinion_core(s["actualName"]):
+        if (not fix and s.get("node") == "nodeNotice"
+                and _opinion_core(title) != _opinion_core(s["actualName"])):
             # 抄送节点只在核心词能对上时才绑（避免把审批意见框误绑到抄送人身上）
             print("  ! 抄送节点「%s」与意见框「%s」只是宽松匹配，已跳过" % (s["actualName"], title))
             continue
-        add(s["DrawID"], s["StepID"], code_of[title], title, comment=True)
+        add(s["DrawID"], s["StepID"], code_of.get(title, title), title, comment=True)
     return out
 
 
@@ -942,7 +964,7 @@ def main(argv):
     steps, cons, parts, rows, warns, conditions = build_steps(
         form, ids["flow_id"], 64560, 85630, 64300, web=web)
     d = patch_skeleton(base, form, steps, cons, parts, ids, conditions)
-    ok, missing, extra = form_set_ok(steps, web)
+    ok, missing, extra = form_set_ok(steps, web, form)
     if ok:
         d["FlowExportData"]["FlowFormSet"] = build_form_set(
             web, steps, ids["flow_id"], form, 36000)   # 表单设置：节点 × 字段权限
