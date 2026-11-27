@@ -1063,8 +1063,9 @@ def main(argv):
         nsteps = len(back["FlowExportData"]["FlowStep"])
         ncond = len(back["FlowExportData"].get("StepCondition") or [])
 
-        # 硬规则（用户 2026-11-27）：09 截图生成的流程一律以「开始 → 申请人」开头，
-        # 第 2 行无论叫「申请人声明」还是别的发起动作，都落成 actualName=申请人 的 nodeFirst。
+        # 硬规则（用户 2026-11-27 二次纠正）：09 截图生成的流程一律以「开始 → 申请人」开头，
+        # 但「申请人」是补出来的独立节点（nodeFirst），截图第 2 行（如「2 申请人声明」）原样保留，
+        # 不得把它改名成「申请人」、也不得吞掉。这里只校验开始节点的唯一后继是这个补出来的申请人。
         st_by_id = {s["DrawID"]: s for s in back["FlowExportData"]["FlowStep"]}
         starts = [s for s in st_by_id.values() if s.get("node") == "nodeStart"]
         if starts:
