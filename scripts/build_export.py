@@ -1062,6 +1062,18 @@ def main(argv):
             [strip_element(e) for e in els], mtpl) if not x.startswith("提示:")]
         nsteps = len(back["FlowExportData"]["FlowStep"])
         ncond = len(back["FlowExportData"].get("StepCondition") or [])
+
+        # 硬规则（用户 2026-11-27）：09 截图生成的流程一律以「开始 → 申请人」开头，
+        # 第 2 行无论叫「申请人声明」还是别的发起动作，都落成 actualName=申请人 的 nodeFirst。
+        st_by_id = {s["DrawID"]: s for s in back["FlowExportData"]["FlowStep"]}
+        starts = [s for s in st_by_id.values() if s.get("node") == "nodeStart"]
+        if starts:
+            nxt = (starts[0].get("processTo") or "").split(",")[0].strip()
+            nx = st_by_id.get(int(nxt)) if nxt.isdigit() else None
+            if not nx or nx.get("node") != "nodeFirst" or nx.get("actualName") != "申请人":
+                hard.append("流程开头必须是「开始 → 申请人」（当前「开始 → %s」）"
+                            % (nx.get("actualName") if nx else "空"))
+
         if pending:
             print("     自检：移动 %d 控件 / 流程图 %d 节点 / 判断条件 %d 条  %s"
                   % (len(els), nsteps, ncond, "OK" if not hard else "FAIL"))
