@@ -354,6 +354,10 @@ def find_crossings(rows):
             tx = dst["x"] + dst["n"]["w"] / 2
             ty = dst["y"]
             span = (dst["y"] - r["y"]) - r["n"]["h"]
+            if ty < sy - 6:
+                # 向上回退的边（退回修改 / 退回申请）渲染时一律走左侧沟槽再水平进入目标，
+                # 中点法（sx, 中间高度）必然落在回退区间里的其它节点上，纯属误报。
+                continue
             if span > 240 and (abs(sx - tx) < 1 or abs(sx - tx) > w_cv * 0.5):
                 # 这类边渲染时走外侧沟槽，不按「直线中点」判断，否则会误报穿框
                 continue
