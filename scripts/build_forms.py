@@ -352,7 +352,8 @@ def auto_row_heights(rows, ncols, fixed=None):
 
 
 def table_ncols(form):
-    n = 6
+    # 默认 6 列（平台标准）；源表是 7 列时在 spec 里写 "cols": 7
+    n = int(form.get("cols") or 6)
     for f in table_fields(form):
         n = max(n, len(f.get("columns") or []))
     return n
