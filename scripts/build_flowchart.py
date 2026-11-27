@@ -74,6 +74,9 @@ FONT = "'Microsoft YaHei','PingFang SC','Hiragino Sans GB',sans-serif"
 
 # 连线文字：(源节点名, 目标节点名) -> 文字（可含换行）。来自 spec 的 graph.edgeLabels
 EDGE_LABELS = {}
+# 同一层三个分支可能同名（都叫「科主任/护士长（护士）审批」），名字键会互相覆盖，
+# 所以条件文字再按 (源draw, 目标draw) 存一份，渲染时优先用它。
+EDGE_LABEL_D = {}
 
 
 def esc(s):
@@ -97,10 +100,20 @@ def wrap(text, max_chars):
     return [text[i:i + per] for i in range(0, n, per)]
 
 
+def wrap_judge(text, max_chars=6):
+    """判断节点折行：优先在「判断是否」后断开，避免把「办公室」切成「办/公室」。"""
+    text = str(text)
+    for head in ("判断是否为", "判断是否", "是否"):
+        if text.startswith(head) and len(text) > max_chars:
+            rest = text[len(head):]
+            return [head] + wrap(rest, max_chars)
+    return wrap(text, max_chars)
+
+
 def node_spec(kind, name):
     """kind: start / first / approve / multi / judge / notice / action / end"""
     # 菱形上下收窄，按 6 字折行；其余按 8 字
-    lines = wrap(name, 6 if kind == "judge" else 8)
+    lines = wrap_judge(name, 6) if kind == "judge" else wrap(name, 8)
     if kind in ("start", "end"):
         h = PILL_H
     elif kind == "judge":
@@ -374,8 +387,71 @@ def report_layout(rows, strict=True):
     return len(ov) if strict else 0
 
 
+def cond_labels(graph):
+    """judge.conditions/else → {(源名, 目标名): 分支文字}。
+
+    与 build_export 的 StepCondition 同源：一个条件项一条，`value` 给列表就是多条
+    （文字用「 / 」连），else 出口写「【取反】…」。
+    """
+    out = {}
+    for n in graph.get("nodes") or []:
+        if not isinstance(n, dict) or not (n.get("conditions") or n.get("else")):
+            continue
+        nm = n.get("name")
+        group, total = {}, 0
+        for c in n.get("conditions") or []:
+            if not isinstance(c, dict):
+                continue
+            to = c.get("to")
+            vals = c.get("value")
+            vals = vals if isinstance(vals, list) else [vals]
+            lab = c.get("label") or c.get("note") or " / ".join(str(v) for v in vals)
+            if to:
+                group.setdefault(to, []).append(lab)
+                total += len(vals)
+        for to, labs in group.items():
+            out[(nm, to)] = labs[0] if (total == 1 and len(labs) == 1) else " / ".join(labs)
+        alt = flow_types.alt_of(n)
+        if alt:
+            lab = ""
+            if isinstance(n.get("else"), dict):
+                lab = n["else"].get("label") or ""
+            out[(nm, alt)] = "【取反】%s" % (lab or "其他")
+    return out
+
+
+def _is_action_node(node):
+    typ = node.get("type") or flow_types.classify(node["name"])
+    return flow_types.meta_of(typ)["kind"] == "action"
+
+
+def resolve_cond_labels(graph, text_map):
+    """条件的目标写成执行动作时（图上会折叠成连线文字），换成折叠后的节点名。
+
+    与 build_export 的 redirect 同一个道理：判断 →4.1（动作）→ 4.1.1 审批，
+    图上只剩 判断→4.1.1，条件文字必须挂到这条边上。
+    """
+    nodes = {n["name"]: n for n in graph.get("nodes") or [] if isinstance(n, dict)}
+    edges = graph.get("edges") or []
+
+    def follow(nm, seen):
+        n = nodes.get(nm)
+        if not n or nm in seen or not _is_action_node(n):
+            return nm
+        for a, b in edges:
+            if a == nm and b not in seen:
+                return follow(b, seen | {nm})
+        return nm
+
+    out = {}
+    for (s, d), v in text_map.items():
+        out[(s, follow(d, set()))] = v
+    return out
+
+
 def rows_from_graph(graph):
     """spec 的 graph：节点可自带 x/y（手工排版），否则走分层自动布局。"""
+    flow_types.expand_conditions(graph)      # judge.conditions/else → 边
     nodes = graph.get("nodes") or []
     edges = graph.get("edges") or []
     # label = 图上显示的文字（不含层级序号）；name 仍作唯一键连边
@@ -440,7 +516,10 @@ def draw_edge_label(x, y, text, canvas_w=None, per=12, gap=None):
         return ""
     if gap:
         n_ok = max(1, min(6, int((gap - 6) // 15)))
-        per = max(6, -(-max(len(l) for l in lines) // n_ok))
+        # 少折行优先：每行至少 12 字（宽度 132px，仍在节点宽 176 以内），
+        # 只有真的放不下才继续收窄——否则「遗失/损坏（请把旧胸牌交还至电脑中心）」
+        # 会被折成一列 6 字的小竖条。
+        per = max(12, -(-max(len(l) for l in lines) // n_ok))
     if canvas_w:
         lines = [s for ln in lines for s in wrap(ln, per)]
         tw = max(len(s) for s in lines) * 11
@@ -638,7 +717,7 @@ def render_canvas(rows):
     # 执行动作不画框、不参与连线：先折叠掉，再算画布范围——
     # 否则 action 的 x/y（只用来参考、实际文字由折线决定）会把画布撑得很宽。
     rows, action_texts, act_chain = fold_action_rows(rows)
-    pad = 46
+    pad = 62
     minx = min(r["x"] for r in rows) - pad
     maxx = max(r["x"] + r["n"]["w"] for r in rows) + pad
     miny = min(r["y"] for r in rows) - pad
@@ -666,6 +745,14 @@ def render_canvas(rows):
             sy = r["y"] + r["n"]["h"] - miny
             tx = dst["x"] + dst["n"]["w"] / 2 - minx
             ty = dst["y"] - miny
+            # 判断节点的横向分支从左右顶点出去：否则「是」「否」两条臂都从菱形
+            # 底部同一个点起步，读者分不清哪条走了右边；左支还必然横穿菱形下半部。
+            # 但目标就在正下方时（中心差 ≤10px）必须走**底顶点直下**，
+            # 否则会先向右下再折回来，横段正好从菱形下半部穿过去、分支文字糊在菱形上。
+            if r["n"]["kind"] == "judge" and abs(sx - tx) > 1:
+                if abs(tx - sx) > 10:
+                    sx = (r["x"] - minx) if tx < sx else (r["x"] + r["n"]["w"] - minx)
+                    sy = r["y"] + r["n"]["h"] / 2 - miny
             span = (dst["y"] - r["y"]) - r["n"]["h"]
             w_cv = maxx - minx
             mid = w_cv / 2.0
@@ -675,7 +762,7 @@ def render_canvas(rows):
                 # 再从目标节点左侧水平进入。多条回退边按出线序号错开，避免叠在一起。
                 gx = 44 + 16 * i
                 ty_mid = dst["y"] + dst["n"]["h"] / 2 - miny
-                tx_l = dst["x"] - dst["n"]["w"] / 2 - minx - 4
+                tx_l = dst["x"] - minx - 4
                 pts = [(sx, sy), (sx, sy + 18), (gx, sy + 18),
                        (gx, ty_mid), (tx_l, ty_mid)]
             elif abs(sx - tx) < 1 and (span <= 240 or corridor_clear(
@@ -700,7 +787,9 @@ def render_canvas(rows):
                                sx, tx, ly, ty - 26, minx, miny)
                 pts = [(sx, sy), (sx, ly), (tx, ly), (tx, ty)]
             parts.append(draw_edge(pts, arrow=(dst["n"]["kind"] != "action")))
-            for ad in act_chain.get((r["draw"], dst["draw"])) or []:
+            lab = (EDGE_LABEL_D.get((r["draw"], dst["draw"]))
+                   or EDGE_LABELS.get((r["n"]["name"], dst["n"]["name"])))
+            for ad in (act_chain.get((r["draw"], dst["draw"])) or []) if not lab else []:
                 ax0, ay0, an = action_texts[ad]
                 hx = ax0 + an["w"] / 2.0 - minx
                 hy = ay0 + an["h"] / 2.0 - miny
@@ -712,17 +801,23 @@ def render_canvas(rows):
                     act_fixed.append((hx, hy, an))
                 else:
                     act_pending.append((path_points(pts), an))
-            lab = EDGE_LABELS.get((r["n"]["name"], dst["n"]["name"]))
-            if lab and r["n"]["kind"] == "judge":
+            if lab:
                 if len(pts) == 6:
                     # 走外侧沟槽的跨层长边：文字用执行动作样式压在沟槽竖线中段
                     lab_parts.append(draw_edge_action_label(
                         pts[2][0], (pts[1][1] + pts[3][1]) / 2.0, lab, w_cv))
+                elif len(pts) == 5:
+                    # 向上回退边（走左侧沟槽）：文字压在沟槽竖线中段，
+                    # 多条回退边靠各自 sy 不同自然错开高度。
+                    lab_parts.append(draw_edge_action_label(
+                        pts[2][0] + 2, (pts[2][1] + pts[3][1]) / 2.0, lab, w_cv))
                 elif len(pts) == 4:
                     # 「下-横-下」折线：压横段中点。压在最后那段竖线上会顶到目标框顶
                     # （两节点之间的竖向间隙本来就窄，容不下 3~4 行字）。
                     lx, ly_ = (pts[1][0] + pts[2][0]) / 2.0, pts[1][1]
-                    per = max(6, int(abs(pts[1][0] - pts[2][0]) / 12.5))
+                    # 横段宽度决定折行；横段为 0（目标就在正下方）时仍按 12 字折，
+                    # 否则会被折成一列 6 字的竖条。
+                    per = max(12, int(abs(pts[1][0] - pts[2][0]) / 12.5))
                     lab_parts.append(draw_edge_label(lx, ly_, lab, w_cv, per=per))
                 else:
                     # 同列直线：压在两个节点之间的中点
@@ -814,6 +909,15 @@ def main(argv):
                         EDGE_LABELS[(strip_no(sn), strip_no(dn))] = v
                         break
             raw = rows_from_graph(form["graph"])
+            # 条件自带的分支文字（低于 edgeLabels 优先级）；目标若是执行动作先穿透到其后继
+            EDGE_LABEL_D.clear()
+            dmap = {r["name"]: r["draw"] for r in raw}
+            for k, v in resolve_cond_labels(form["graph"], cond_labels(form["graph"])).items():
+                sd, dd = dmap.get(k[0]), dmap.get(k[1])
+                if sd and dd:
+                    EDGE_LABEL_D[(sd, dd)] = v
+                for sn, dn in ((k[0], k[1]), (strip_no(k[0]), strip_no(k[1]))):
+                    EDGE_LABELS.setdefault((sn, dn), v)
             rows = canvas_rows(raw)
             if report_layout(rows):
                 return 1

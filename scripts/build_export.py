@@ -81,6 +81,241 @@ def strip_no(name):
     return re.sub(r"^\s*\d+(?:\.\d+)*\s*", "", str(name or "")).strip()
 
 
+# ---------------------------------------------------------------- 判断条件
+# 平台把判断规则存成 FlowStepCondition（一行 = 判断节点的一个条件项），
+# 与连线的 ConContent `[n]` 对应。写法见 references/flow-export.md。
+COND_OPS = {"=": "eq", "==": "eq", "eq": "eq", "!=": "ne", "<>": "ne", "ne": "ne",
+            ">": "gt", "gt": "gt", "<": "lt", "lt": "lt",
+            ">=": "ge", "ge": "ge", "<=": "le", "le": "le"}
+LIST_TYPES = ("radio", "checkbox", "select", "selectDep", "multiSelect")
+
+
+def cond_blank():
+    """一条空的 StepCondition（35 键，键序与平台导出件一致）。"""
+    return {
+        "DrawID": 0, "FlowID": 0, "ID": 0, "SortID": 0,
+        "SourceDrawID": 0, "SourceStepID": 0, "StepID": 0,
+        "TargetDrawID": 0, "TargetStepID": 0,
+        "compareType": "eq", "flowVersion": "1.0",
+        "isCanDel": True, "isComputed": False, "isUse": True,
+        "jIdentity": "[1]",
+        "leftCollDealType": "1,2,3", "leftDescription": "", "leftDetailsType": "Str",
+        "leftHandle": "", "leftHandleDescription": "", "leftHandleHidden": "",
+        "leftProbableType": "Str", "leftVarCode": "", "leftVarName": "",
+        "leftVarType": "FormVariable", "note": "",
+        "rightCollDealType": "1,2,3", "rightDescription": "", "rightDetailsType": "Str",
+        "rightProbableType": "Str", "rightVarCode": "", "rightVarName": "",
+        "rightVarType": "ListVariable", "tabCode": "BaseJudge", "variFilterType": "Default",
+    }
+
+
+def field_code_map(web):
+    """Web 视图里 chkName → (字段码, 控件类型)：判断条件的左值靠它定位字段。
+
+    单选/多选/下拉在平台里存 `<码>_Value`，条件里也要写这个后缀。
+    """
+    out = {}
+    for r in ((web or {}).get("rows") or {}).values():
+        if not isinstance(r, dict):
+            continue
+        for cell in (r.get("cells") or {}).values():
+            if not isinstance(cell, dict):
+                continue
+            code, st = cell.get("bindData"), cell.get("SheetType") or ""
+            name = (cell.get("chkName") or "").strip()
+            if code and st != "approve" and name and name not in out:
+                out[name] = (code, st)
+    return out
+
+
+def _cond_values(val):
+    """一个条件项的值 → 多个值（列表写法拆成多条条件）。"""
+    if isinstance(val, (list, tuple)):
+        return [v for v in val]
+    return [val]
+
+
+def _left_of(field, code_map, where):
+    """左值：表单变量。返回 (left_dict, 控件类型) 或 (None, None)。"""
+    info = code_map.get(field)
+    if not info:
+        print("  ! 判断「%s」的条件字段「%s」在表单里找不到，跳过这条条件" % (where, field))
+        return None, None
+    code, st = info
+    is_list = st in LIST_TYPES
+    name = field + ("(值)" if is_list else "")
+    dtype = ("ListCustom" if is_list else
+             "Int" if st in ("inputNum", "inputNumDisplay", "number", "amount") else
+             "Date" if st in ("date", "datepicker", "dateRange") else "Str")
+    return ({
+        "type": "FormVariable",
+        "code": code + ("_Value" if is_list else ""),
+        "name": "<%#myField\\" + name + "%>",
+        "desc": "表单变量：" + name,
+        "details": dtype,
+    }, st)
+
+
+def _right_of(value, field, left):
+    """右值：选项字段用集合变量，数字用常量，其余按字符串常量。"""
+    if left["details"] == "ListCustom":
+        return {"type": "ListVariable", "code": str(value), "name": str(value),
+                "desc": "集合变量：【%s】%s" % (field, value), "details": "ListCustom"}
+    if left["details"] == "Int":
+        return {"type": "ConstantVariable", "code": str(value),
+                "name": "<@%Int://%s@>" % value,
+                "desc": "常量变量：%s" % value, "details": "Int"}
+    return {"type": "ConstantVariable", "code": str(value), "name": str(value),
+            "desc": "常量变量：%s" % value, "details": "Str"}
+
+
+def _cond_label(value, given=""):
+    """条件项的显示文字：显式 note 优先，列表值用「 / 」连。"""
+    if given:
+        return str(given)
+    return " / ".join(str(v) for v in _cond_values(value))
+
+
+def build_conditions(form, steps, code_map, flow_id, start_id, redirect=None, rows=None):
+    """judge.conditions → StepCondition 列表 + 每条出线的文字/ConContent。
+
+    平台规则（实测 422 导出件）：
+    - **只有一个条件项**的判断，两条出线写 `[1]` / `![1]`（后者即 else 取反）；
+    - **多个条件项**时连线 ConContent 留空，靠 ConContentDesc 的文本按「 / 」对齐，
+      所以同一出口的多个条件在 Desc 里用「 / 」连起来；
+    - 条件的目标写成执行动作（图上折叠掉的那种）也能穿透到它的后继节点。
+    出线一律按**绘图号**配对（actualName 允许重名，如三条分支都叫「科主任审批」）。
+    返回 (条件列表, {(判断绘图号, 目标绘图号): (note, desc, ConContent)}, 告警)。
+    """
+    redirect = redirect or {}
+    conds_out, edge_text, warns = [], {}, []
+    node_of = {}
+    for n in (form.get("graph") or {}).get("nodes") or []:
+        if isinstance(n, dict) and (n.get("conditions") or n.get("else")):
+            node_of[n["name"]] = n
+    if not node_of:
+        return conds_out, edge_text, warns
+    by_draw = {s["DrawID"]: s for s in steps}
+    draw_of = {r["name"]: r["draw"] for r in (rows or [])}
+    short_of, dup_short = {}, set()
+    for r in rows or []:
+        k = strip_no(r["name"])
+        if k in short_of:
+            dup_short.add(k)
+        else:
+            short_of[k] = r["draw"]
+
+    def resolve(to, where):
+        """条件的目标名 → 折叠后的绘图号（执行动作一路穿到底）。"""
+        if not to:
+            return None
+        if to in draw_of:
+            return draw_of[to]
+        k = strip_no(to)
+        ends = [d for d in (redirect.get(k) or []) if d in by_draw]
+        if ends:
+            if len(ends) > 1:
+                warns.append("判断「%s」的目标「%s」经执行动作分成 %d 条线，条件只取第一条"
+                             % (where, to, len(ends)))
+            return ends[0]
+        if k in short_of and k not in dup_short:
+            return short_of[k]
+        warns.append("判断「%s」的分支目标「%s」不是流程节点，条件与分支文字未生成"
+                     % (where, to))
+        return None
+
+    for s in steps:
+        if s.get("node") != "nodeJudge":
+            continue
+        node = None
+        for nm, nd in node_of.items():
+            if nm == s["actualName"] or strip_no(nm) == s["actualName"]:
+                node = nd
+                break
+        if not node:
+            continue
+        items = []                       # 一个值一项：{v, dst, lab, op, left, field}
+        for c in node.get("conditions") or []:
+            if not isinstance(c, dict):
+                continue
+            field = c.get("field") or c.get("left")
+            to = c.get("to")
+            if not field or not to:
+                warns.append("判断「%s」有条件缺 field/to，已跳过" % s["actualName"])
+                continue
+            left, _st = _left_of(field, code_map, s["actualName"])
+            if not left:
+                continue
+            dst = resolve(to, s["actualName"])
+            if dst is None:
+                continue
+            op = c.get("op") or c.get("compareType")
+            for v in _cond_values(c.get("value")):
+                items.append({"v": v, "dst": dst,
+                              "lab": _cond_label(v, c.get("label") or c.get("note")),
+                              "op": op, "left": left, "field": field})
+        if not items:
+            continue
+        # 写条件行：一个值 = 一条 jIdentity
+        for i, it in enumerate(items, 1):
+            rec = cond_blank()
+            right = _right_of(it["v"], it["field"], it["left"])
+            rec.update({
+                "DrawID": s["DrawID"], "FlowID": flow_id,
+                "ID": start_id + len(conds_out), "StepID": s["StepID"],
+                "compareType": COND_OPS.get(str(it["op"] or "eq"), "eq"),
+                "jIdentity": "[%d]" % i, "note": it["lab"],
+                "leftVarType": it["left"]["type"], "leftVarCode": it["left"]["code"],
+                "leftVarName": it["left"]["name"], "leftDescription": it["left"]["desc"],
+                "leftDetailsType": it["left"]["details"],
+                "leftProbableType": it["left"]["details"],
+                "rightVarType": right["type"], "rightVarCode": right["code"],
+                "rightVarName": right["name"], "rightDescription": right["desc"],
+                "rightDetailsType": right["details"], "rightProbableType": right["details"],
+            })
+            conds_out.append(rec)
+        # else 出口
+        alt = flow_types.alt_of(node)
+        alt_dst = resolve(alt, s["actualName"]) if alt else None
+        alt_label = ""
+        if isinstance(node.get("else"), dict):
+            alt_label = node["else"].get("label") or ""
+        # 按实际出线顺序归组（steps.processTo 就是 importantShunt 的顺序）
+        groups = {}
+        for it in items:
+            groups.setdefault(it["dst"], []).append(it["lab"])
+        if alt_dst is not None:
+            groups.setdefault(alt_dst, [])
+        order = []
+        for did in str(s.get("processTo") or "").split(","):
+            did = did.strip()
+            if did.isdigit() and int(did) in groups and int(did) not in order:
+                order.append(int(did))
+        for did in groups:
+            if did not in order:
+                order.append(did)
+        single = len(items) == 1
+        for i, did in enumerate(order):
+            labs = groups[did]
+            if did == alt_dst and not labs:
+                lab = alt_label or "其他"
+                note, desc = "【取反】 %s" % lab, " 【取反】 %s " % lab
+            else:
+                lab = labs[0] if single else " / ".join(labs)
+                note, desc = lab, " %s " % lab
+            con = ""
+            if single:
+                if did == alt_dst:
+                    con = "![1]"
+                elif alt_dst is None and len(order) == 2 and i == 1:
+                    con = "![1]"
+                    note, desc = "【取反】是", " 【取反】 是 "
+                else:
+                    con = "[1]"
+            edge_text[(s["DrawID"], did)] = (note, desc, con)
+    return conds_out, edge_text, warns
+
+
 def fit_con_name(name, limit=50):
     """连线的目标节点名受平台 wmFlowStepCon.NextActualName varchar(50) 限制。
 
@@ -97,11 +332,12 @@ def fold_action_nodes(rows):
 
     执行动作在流程图上只是压在连线上的文字、不是步骤：导出包里必须**删掉这些节点**，
     让前驱直接连到后继，原步骤名成为这条连线上的文字（FlowStepCon.note / ConContentDesc）。
-    返回 (折叠后的 rows, {(源名, 目标名): 连线文字})；draw 重新按顺序编号。
+    返回 (折叠后的 rows, {(源名, 目标名): 连线文字}, {action 名: [折叠后的终点绘图号]})；
+    draw 重新按顺序编号。第三个表给判断条件用——条件的 to 写在 action 上时要能穿过它。
     """
     acts = {r["draw"]: r for r in rows if r.get("kind") == "action"}
     if not acts:
-        return rows, {}
+        return rows, {}, {}
     succ = {r["draw"]: list(r.get("to") or []) for r in rows}
 
     def walk(d, seen):
@@ -120,7 +356,7 @@ def fold_action_nodes(rows):
     keep = [r for r in rows if r["draw"] not in acts]
     old2new = {r["draw"]: i + 1 for i, r in enumerate(keep)}
     by_old = {r["draw"]: r for r in keep}
-    labels = {}
+    labels, redirect = {}, {}
     for r in keep:
         new_to = []
         for t in r.get("to") or []:
@@ -142,19 +378,27 @@ def fold_action_nodes(rows):
             elif t in old2new and old2new[t] not in new_to:
                 new_to.append(old2new[t])
         r["to"] = new_to
+    for a in acts.values():
+        ends = []
+        for end, _ in walk(a["draw"], set()):
+            if end in old2new and old2new[end] not in ends:
+                ends.append(old2new[end])          # 折叠后的绘图号（名字可能重名，号唯一）
+        redirect[strip_no(a["name"])] = ends
     for r in keep:
         r["draw"] = old2new[r["draw"]]
-    return keep, labels
+    return keep, labels, redirect
 
 
-def build_steps(form, flow_id, step_base, con_base, part_base):
+def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
     """按动作类型建节点：默认 开始→申请人→每个 approve→结束；spec 有 flow 就按 flow 走。
 
     动作类型见 flow_types.TYPE_META：判断=菱形(nodeJudge/6)、通知=nodeNotice/3、审批=nodeApprove/2。
     没实测到 node 编码的类型（存档/生成处理签/空步骤）按规则先落成通知执行，并回一条告警。
+    web 只用于取字段码（判断条件的左值），没有 Web 视图时判断条件会跳过并告警。
     """
     if form.get("graph"):
         g = form["graph"]
+        flow_types.expand_conditions(g)      # judge.conditions/else → 边（写没写 edges 都能跑）
         nodes, edges = g.get("nodes") or [], g.get("edges") or []
         manual = nodes and all(isinstance(n, dict) and "x" in n and "y" in n for n in nodes)
         rows = (flow_types.layout_graph(nodes, edges) if not manual else _rows_manual(nodes, edges))
@@ -173,11 +417,11 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
         for r in rows:
             r["label"] = _lab.get(r["name"], r["name"])
     # 执行动作不生成步骤：折叠成连线文字（用户 2026-11-26 明确要求）
-    rows, _fold_labels = fold_action_nodes(rows)
+    rows, _fold_labels, _redirect = fold_action_nodes(rows)
     by_draw = {r["draw"]: r for r in rows}
     # 连线文字：graph.edgeLabels 的键是「源节点名 → 目标节点名」，值是要显示的字（可能带换行）。
     # 平台把它落在 FlowStepCon 的 note（varchar(200)）与 ConContentDesc（text）上。
-    labels = {}
+    labels, user_lab = {}, set()
     if form.get("graph"):
         for k, v in (form["graph"].get("edgeLabels") or {}).items():
             if isinstance(k, str) and "→" in k and isinstance(v, str):
@@ -185,6 +429,7 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
                 if v.replace("\n", "").strip():
                     # 换行是给人看的排版，平台 note 里压成空格，不能直接删——删了会粘成一坨
                     labels[(a.strip(), b.strip())] = re.sub(r"\s*\n\s*", " ", v).strip()
+                    user_lab.add((a.strip(), b.strip()))
     labels.update(_fold_labels)   # 执行动作折叠出来的连线文字
     warns = []
     for r in rows:
@@ -196,6 +441,7 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
                          % (r["name"], len(r["name"])))
 
     steps, cons, parts = [], [], []
+    explicit = set()                 # 用户用 edgeLabels 显式写了文字的连线（条件不覆盖它）
     defaults = load_node_defaults()
     for i, r in enumerate(rows):
         meta = flow_types.meta_of(r["key"])
@@ -250,6 +496,8 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
             dst_show = dst.get("label") or strip_no(dst["name"])
             if lab:
                 note, desc = lab[:200], " %s " % lab
+                if (r["name"], dst["name"]) in user_lab:   # 只有 edgeLabels 算「用户显式」
+                    explicit.add((draw, t))
             elif node == "nodeJudge":
                 if len(outs) == 2 and not named_branch:
                     first = outs.index(t) == 0
@@ -274,7 +522,28 @@ def build_steps(form, flow_id, step_base, con_base, part_base):
                 # 判断连线 validateType=1（普通 0），否则步骤属性里的分支页签取不到数据
                 "note": note, "validateType": 1 if node == "nodeJudge" else 0,
             })
-    return steps, cons, parts, rows, warns
+    # 判断条件（StepCondition）：节点建好后回填连线文字与 ConContent。
+    # 用户的 edgeLabels 优先，条件只补没写文字的那些出线。
+    conditions = []
+    if steps:
+        code_map = field_code_map(web)
+        if not code_map:
+            has_cond = any(isinstance(n, dict) and (n.get("conditions") or n.get("else"))
+                           for n in ((form.get("graph") or {}).get("nodes") or []))
+            if has_cond:
+                warns.append("没有 Web 视图（重复表缺表名？），判断条件的字段码取不到，"
+                             "StepCondition 未生成")
+        conditions, cond_text, cwarn = build_conditions(
+            form, steps, code_map, flow_id, 50000, redirect=_redirect, rows=rows)
+        warns.extend(cwarn)
+        for c in cons:
+            key = (c["DrawID"], c["NextDrawID"])
+            hit = cond_text.get(key)
+            if not hit or key in explicit:      # 显式 edgeLabels 优先，条件不覆盖
+                continue
+            note, desc, con = hit
+            c["note"], c["ConContentDesc"], c["ConContent"] = note[:200], desc, con
+    return steps, cons, parts, rows, warns, conditions
 
 
 def apply_table_names(forms, values, allow_missing=False):
@@ -507,7 +776,7 @@ def build_form_set(web, steps, flow_id, form=None, start_id=36000):
     return out
 
 
-def patch_skeleton(base, form, steps, cons, parts, ids):
+def patch_skeleton(base, form, steps, cons, parts, ids, conditions=None):
     """在导出骨架上替换流程节点，并把各处 ID 改成新号段。"""
     d = copy.deepcopy(base)
     fe = d["FlowExportData"]
@@ -517,6 +786,11 @@ def patch_skeleton(base, form, steps, cons, parts, ids):
     fe["FlowStep"] = steps
     fe["FlowStepCon"] = cons
     fe["FlowStepPart"] = parts
+    fe["StepCondition"] = conditions or []
+    # 平台导出件里流程是「已验证」状态（isValidate=true），导入后不会拦着点「发布」；
+    # 骨架默认 false，两处一起改。
+    fe["FlowSet"]["isValidate"] = True
+    fe["FlowSetVersion"]["isValidate"] = True
     fe["FlowSet"]["FlowID"] = flow_id
     fe["FlowSet"]["TemplateID"] = tpl_id
     # 平台导入弹窗里的「流程名称」读的是 FlowSet.name（不是 FlowSetVersion.name），两处都要改
@@ -609,9 +883,9 @@ def main(argv):
         "part_user": 74990, "extra_op": 7010,
         "main_view_id": a.template_id + 702,     # 「主视图」的 ViewID（视图绑定的默认目标）
     }
-    steps, cons, parts, rows, warns = build_steps(
-        form, ids["flow_id"], 64560, 85630, 64300)
-    d = patch_skeleton(base, form, steps, cons, parts, ids)
+    steps, cons, parts, rows, warns, conditions = build_steps(
+        form, ids["flow_id"], 64560, 85630, 64300, web=web)
+    d = patch_skeleton(base, form, steps, cons, parts, ids, conditions)
     ok, missing, extra = form_set_ok(steps, web)
     if ok:
         d["FlowExportData"]["FlowFormSet"] = build_form_set(
@@ -688,6 +962,17 @@ def main(argv):
         print("       ! %s" % w)
     print("     FlowID=%d TemplateID=%d 主表=%s"
           % (ids["flow_id"], ids["template_id"], T["mainTableName"]))
+    if conditions:
+        print("     判断条件 %d 条（StepCondition）：%s"
+              % (len(conditions), "、".join(
+                  "Draw%s[j%s]%s" % (c["DrawID"], c["jIdentity"].strip("[]"), c["note"])
+                  for c in conditions)))
+    covered = {c["DrawID"] for c in conditions}
+    uncovered = [s["actualName"] for s in steps
+                 if s.get("node") == "nodeJudge" and s["DrawID"] not in covered]
+    if uncovered:
+        print("     ! 这些判断没有条件规则（导入后要在平台手工配）：%s"
+              % "、".join(uncovered))
     print("     -> %s" % path)
 
     if pending:
@@ -730,14 +1015,15 @@ def main(argv):
         hard = [x for x in validate_form.check_mobile(
             [strip_element(e) for e in els], mtpl) if not x.startswith("提示:")]
         nsteps = len(back["FlowExportData"]["FlowStep"])
+        ncond = len(back["FlowExportData"].get("StepCondition") or [])
         if pending:
-            print("     自检：移动 %d 控件 / 流程图 %d 节点（Web 待补）  %s"
-                  % (len(els), nsteps, "OK" if not hard else "FAIL"))
+            print("     自检：移动 %d 控件 / 流程图 %d 节点 / 判断条件 %d 条  %s"
+                  % (len(els), nsteps, ncond, "OK" if not hard else "FAIL"))
         else:
             sheet = json.loads(back["TemplateData"]["mainView"]["sheet"])
             hard += [x for x in validate_form.check_web(sheet, wtpl) if not x.startswith("提示:")]
-            print("     自检：Web %d 行 / 移动 %d 控件 / 流程图 %d 节点  %s"
-                  % (len([k for k in sheet["rows"] if k != "len"]), len(els), nsteps,
+            print("     自检：Web %d 行 / 移动 %d 控件 / 流程图 %d 节点 / 判断条件 %d 条  %s"
+                  % (len([k for k in sheet["rows"] if k != "len"]), len(els), nsteps, ncond,
                      "OK" if not hard else "FAIL"))
         for x in hard:
             print("       - %s" % x)

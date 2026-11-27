@@ -120,6 +120,58 @@
 
 **验收口径**：导出包里 `ActionTypeID==4` 必须为 0 个；被折叠的步骤名出现在对应连线 `note` 里；`actualName` 不含 `1 `、`5.1.1 ` 这类序号；每条连线两端都在节点表里（无孤岛、无死胡同）。
 
+## P5 · 判断条件 StepCondition + isValidate（2026-11-27）
+
+**需求来源**：解析平台真实导出件 `流程导出_422信息系统用户操作权限申请_v1.0.json`（FlowID 86）后确认：
+结构与本生成器逐键一致，唯一影响功能的差异是**判断节点的条件规则为空**（`StepCondition` 0 条、连线 `ConContent` 全空），
+导入后要在平台手工配分支规则。用户要求把这条和 `isValidate` 一起做进生成器。
+
+**平台写法**（`references/flow-export.md` 有完整字段表）
+
+| 条件项数 | 连线 `ConContent` | `ConContentDesc` |
+|---|---|---|
+| 1 个 | `[1]` / `![1]`（取反） | ` 是 ` / ` 【取反】 是 ` |
+| ≥ 2 个 | **留空** | 各值文本用「 / 」连 |
+
+条件行 35 键，左值 `FormVariable`（`KM0004_Value` + `<%#myField\人员类别(值)%>`），右值 `ListVariable` / `ConstantVariable` / `SQLVariable`。
+
+**补丁位置**
+
+1. `scripts/flow_types.py` 新增 `alt_of(node)` / `expand_conditions(graph)`：
+   `judge.conditions[].to` 与 `else` 自动补成 `edges`（没写也能跑），并按条件顺序把该判断的出线排到前面。
+2. `scripts/build_export.py`
+   - 新增 `cond_blank()`（35 键空模板，键序与平台一致）、`field_code_map(web)`（chkName → 字段码/控件类型）、
+     `_left_of` / `_right_of` / `_cond_label`、`build_conditions(...)`。
+   - `build_conditions` 按**绘图号**配对（`actualName` 允许重名，三条分支都叫「科主任审批」时按名字会串），
+     条件的 `to` 写成执行动作时用 `fold_action_nodes` 返回的 `redirect` 穿透到后继。
+   - `build_steps(..., web=None)` 返回 `conditions`；出线文字回填时**用户 `edgeLabels` 优先**，
+     条件覆盖自动生成的折叠动作名与「是/否」。
+   - `fold_action_nodes` 第三返回值 `redirect`：`{action 名: [折叠后绘图号]}`。
+   - `patch_skeleton(..., conditions)` 写入 `FlowExportData.StepCondition`；
+     `FlowSet.isValidate` / `FlowSetVersion.isValidate` 一并置 `true`（平台导出件都是 true）。
+   - 自检输出加判断条件条数；未配条件的判断单独提示。
+3. `scripts/build_flowchart.py`
+   - 新增 `cond_labels(graph)` / `resolve_cond_labels(...)`：条件文字画到判断出线上，目标若是执行动作先穿透。
+   - 新增按绘图号索引的 `EDGE_LABEL_D`：**同一层三分支节点同名时，名字键会互相覆盖**，draw 键才唯一。
+   - 有条件文字的边不再重复画执行动作名。
+   - 判断的「正下方」分支（中心差 ≤10px）改走**底顶点直下**——原来从右顶点出会让横段横穿菱形下半部、文字糊在菱形上。
+   - 分支文字每行至少 12 字（原来按横段宽度算，横段为 0 时折成 6 字竖条）。
+4. `references/spec-format.md` 新增「判断条件」一节；`references/flow-export.md` 新增「StepCondition」一节并修正「ConContent 为空」的解释；`SKILL.md` 判断条件速查补两行。
+
+**spec 写法**
+
+```json
+{"name": "5 判断人员类别", "type": "judge", "x": 460, "y": 420,
+ "conditions": [
+   {"field": "人员类别", "value": "医技药人员", "to": "6 医务科初审"},
+   {"field": "人员类别", "value": ["护理人员", "行政后勤人员"], "to": "7 相关职能科审批"}]}
+```
+
+是否判断用 `else` 更贴近平台：`{"conditions":[{...,"to":"9 ..."}], "else": {"to":"10 ...","label":"非新入岗人员"}}`。
+
+**验收口径**：有 `conditions` 的判断，`StepCondition` 条数 = 条件值个数；只有 1 条时出线 `ConContent` 为 `[1]`/`![1]`，
+否则为空且 Desc 用「 / 」连；`FlowSet.isValidate == true`；流程图判断出线显示条件文字而非执行动作名。
+
 ## 无法通过本技能实现的部分（记下来，别再试）
 
 - **流程「权限分配」页（授权对象 / 监控权限 13 项 / 知会权限）不在 `流程导出_*.json` 里**。

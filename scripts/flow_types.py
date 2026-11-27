@@ -223,6 +223,72 @@ def assert_unique(names):
                          % "、".join(sorted(set(dup))))
 
 
+def alt_of(node):
+    """判断节点的「取反出口」目标名：`else` 可写成名字或 {to,label}。"""
+    alt = (node or {}).get("else")
+    if isinstance(alt, dict):
+        return alt.get("to")
+    return alt if isinstance(alt, str) else None
+
+
+def expand_conditions(graph):
+    """把 judge.conditions / else 展开成 edges，并按条件顺序重排出线。
+
+    conditions 一条 = 判断的一个条件项（对应平台 StepCondition 的 jIdentity [n]）：
+
+        {"name": "5 判断人员类别", "type": "judge",
+         "conditions": [
+            {"field": "人员类别", "value": "医技药人员", "to": "6 医务科初审"},
+            {"field": "人员类别", "value": ["护理人员", "行政后勤人员"], "to": "7 相关职能科审批"}],
+         "else": "10 系统管理员处理"}
+
+    - `value` 给列表 = 拆成多个条件项（平台里是 [2]、[3] 两条，note 用「 / 」拼给同一条出线）；
+    - `else` = 「其余情况」出口，不生成条件项，连线写取反；
+    - 边没在 edges 里写也会自动补上，写了的按条件顺序排到前面。
+    原地修改 graph，返回补的边数。
+    """
+    nodes = graph.get("nodes") or []
+    edges = graph.setdefault("edges", [])
+    if not isinstance(edges, list):
+        return 0
+    names = {n.get("name") for n in nodes if isinstance(n, dict)}
+    edge_set = {(e[0], e[1]) for e in edges
+                if isinstance(e, (list, tuple)) and len(e) >= 2}
+    added = 0
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        nm, conds = n.get("name"), n.get("conditions") or []
+        alt = alt_of(n)
+        if not nm or (not conds and not alt):
+            continue
+        for c in conds:
+            to = c.get("to") if isinstance(c, dict) else None
+            if to in names and (nm, to) not in edge_set:
+                edges.append([nm, to])
+                edge_set.add((nm, to))
+                added += 1
+        if alt in names and (nm, alt) not in edge_set:
+            edges.append([nm, alt])
+            edge_set.add((nm, alt))
+            added += 1
+        order = []
+        for c in conds:
+            to = c.get("to") if isinstance(c, dict) else None
+            if to in names and to not in order:
+                order.append(to)
+        if alt in names and alt not in order:
+            order.append(alt)
+        idxs = [i for i, e in enumerate(edges)
+                if isinstance(e, (list, tuple)) and len(e) >= 2 and e[0] == nm]
+        if idxs:
+            cur = [edges[i][1] for i in idxs]
+            new = [t for t in order if t in cur] + [t for t in cur if t not in order]
+            for i, t in zip(idxs, new):
+                edges[i] = [nm, t]
+    return added
+
+
 def layout_graph(nodes, edges, x0=460, gap_y=140, gap_x=200):
     """通用图布局（分层）：支持三路以上分支、嵌套判断、跨层长边。
 
