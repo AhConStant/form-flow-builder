@@ -9,7 +9,7 @@
 
 | 依赖 | 说明 |
 |---|---|
-| Python 3.10+ | 只需标准库；`render_web_preview.py` 另需 pillow（可选） |
+| Python 3.10+ | 只需标准库；`render_web_preview.py` / `render_mobile_preview.py` 另需 pillow（可选） |
 | pillow | 仅预览 PNG 用，缺了会自动跳过 |
 | Word COM | 仅 `scripts/doc2docx.ps1` 需要，Windows + 已装 Word |
 
@@ -142,7 +142,7 @@ form-flow-builder/
 ├─ README.md                   本文件
 ├─ CHANGELOG.md                版本记录
 ├─ assets/
-│  ├─ mobile_view_template.txt 移动视图标准模板（15 类控件）
+│  ├─ mobile_view_template.txt 移动视图标准模板（16 类控件）
 │  ├─ web_view_template.txt    Web 视图标准模板（17 样式）
 │  ├─ forms_spec.example.json  spec 示例
 │  ├─ forms_spec.formulas.example.json  计算式/大小写金额/条件隐藏/流水号示例
@@ -166,7 +166,8 @@ form-flow-builder/
    ├─ flow_types.py            动作类型判定 / 画布形状 / 自动布局
    ├─ validate_form.py         校验器
    ├─ scan_gray_hints.py       .docx 灰字提示扫描（→ spec.placeholder）
-   ├─ render_web_preview.py    JSON → PNG 预览（可选）
+   ├─ render_web_preview.py    Web JSON → PNG 预览（可选）
+   ├─ render_mobile_preview.py 移动 JSON → PNG 预览（可选）
    └─ doc2docx.ps1             .doc → .docx（Word COM）
 ```
 

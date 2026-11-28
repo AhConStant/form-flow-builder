@@ -36,7 +36,8 @@ agent_created: true
 > **党组发文 `doc` + `24`**。`docSend` 是早期推断值，任何导出件都没出现，**已废弃**。
 > 截图里带「**选取**」按钮的格子一律写成 `selectData` 字段（`mapTo` 指回填字段，
 > `dataTable`/`dataField` 照 801 收文导出件：科室 `priDepartment/DepName`、单位 `DocUnit/Name`、
-> 人员 `priUser/UserName`），行末用 `blank` 补满列；再补 `bookmarks` 把字段绑到
+> 人员 `priUser/UserName`），行末用 `blank` 补满列；**Web 与移动两端都会生成**（移动端是一条
+> `selectData` 控件，`label` 写按钮名，别再补输入框兜底）；再补 `bookmarks` 把字段绑到
 > `Title`/`DocType`/`Urgent`/`Secret`/`CcGov`/`Keyword` 等公文属性。详见 `references/spec-format.md`「公文流程」。
 
 两个口号的口径：
@@ -277,6 +278,7 @@ python scripts/validate_form.py "流程表单/01发文流程(Web视图).txt"
   它会把 `sheet`（Web）、`template.elements`（移动）写成**字符串**塞进 `TemplateData`，并按 `approve` 重建 `FlowStep`；
   生成后自动回抽校验，自检不过返回非 0。ID 段（FlowID/TemplateID/主表名）是占位号，导入前要按平台实际号段改。
 - 需要目视核对布局时：`python scripts/render_web_preview.py "xxx(Web视图).txt"`（预览器只核对字段/布局/列宽，不还原边框，别用它反推样式）。
+  移动端控件清单用 `python scripts/render_mobile_preview.py "xxx(移动视图).txt"` 出手机版预览（看有没有漏生成的控件）。
 
 ## 判断条件速查
 
@@ -321,7 +323,7 @@ python scripts/validate_form.py "流程表单/01发文流程(Web视图).txt"
 
 | 路径 | 用途 |
 |---|---|
-| `assets/mobile_view_template.txt` | 移动视图标准模板（15 类控件、属性全集） |
+| `assets/mobile_view_template.txt` | 移动视图标准模板（16 类控件、属性全集；含 `selectData` 数据选取） |
 | `assets/forms_spec.formulas.example.json` | 计算式/大小写金额/条件隐藏/流水号的 spec 示例 |
 | `assets/web_view_template.txt` | Web 视图标准模板（6 列起、17 样式，含重复表/静态说明样式） |
 | `assets/forms_spec.example.json` | spec 示例 |
@@ -333,7 +335,8 @@ python scripts/validate_form.py "流程表单/01发文流程(Web视图).txt"
 | `scripts/build_flowchart.py` | 流程图：spec 推主线 / 平台导出还原，出 SVG + HTML |
 | `scripts/build_export.py` | 按平台导出格式打包：Web + 移动 + 流程图 → 一个 JSON |
 | `scripts/validate_form.py` | 校验器，可独立使用 |
-| `scripts/render_web_preview.py` | JSON → PNG 预览（需 pillow，可选） |
+| `scripts/render_web_preview.py` | Web JSON → PNG 预览（需 pillow，可选） |
+| `scripts/render_mobile_preview.py` | 移动 JSON → PNG 预览（手机版控件清单，需 pillow，可选） |
 | `scripts/doc2docx.ps1` | .doc → .docx（Word COM） |
 | `scripts/scan_gray_hints.py` | 扫描 .docx 灰色字体提示 → `{label,hint,row,col}` JSON |
 | `references/field-rules.md` | 控件判定表、必填、默认值、布局、命名、待确认清单 |

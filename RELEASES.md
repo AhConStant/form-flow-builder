@@ -6,6 +6,34 @@
 - 次版本：新增能力、新增参考文档、兼容现有用法。
 - 修订号：缺陷修复、脚本稳定性、规则补充。
 
+## 1.3.8 - 2026-11-28
+
+补上**移动视图缺失的「数据选取」控件**（用户实测：公文发文移动端 8 个选取按钮全没生成）。
+生成逻辑修复，模板 / 校验 / 文档同步。
+
+- **根因**：`build_mobile()` 里 `if t == "selectData": continue` —— 早期只按 Web 端实现，
+  移动模板也没有这一类，移动端就一直只剩纯文本框，手机上无法调取科室/单位/主题词。
+- **实证来源**：**801 收文流程导出件** `TemplateData.mainView.template.elements` 里就有
+  5 个 `selectData` 控件（「选择来文单位」「选择抄送机关」「选择主题词」…），
+  与 Web 端三点不同：没有 `bindData`/`SheetType`、`label` = `buttonName`、
+  靠 `selDataSet.dataMapping[].MapField` 指回目标字段 `KM00xx`。
+- `assets/mobile_view_template.txt`：白名单 15 类 → **16 类**，新增 `selectData`（照 801 原样，
+  去掉只对该表单有意义的 `oldTableKey`/`oldTableName`）。
+- `build_forms.build_sel_dataset()`：抽出一份 `selDataSet` 构造，Web 的 `scell()` 与移动共用，
+  两端 `dataTable`/`dataField`/`filterCondition`/`isMutilSelect`/`orderField` 永远一致。
+- `build_mobile()` 新增 `bind_of` 参数 + `build_mobile_select_data()`：`label`=`buttonName`=
+  「选择+目标字段名」，`isRequire=false`，`onlySelectData=true`。
+  **生成顺序改为先 Web 后移动**（`build_export.py` 同步），因为 `MapField` 要用 Web 发的 KM 号；
+  `--mobile-only` 也会先算一遍 Web 只取编号（拿不到时打印告警，可给 spec 补 `mapField` 兜底）。
+- `validate_form.check_mobile()` 新增硬校验：`label == buttonName`、`onlySelectData` 为真、
+  `selDataSet.dataMapping` 非空且 `MapField` 匹配 `KM\d{4}`——避免以后再被静默跳过。
+- 文档：`references/mobile-schema.md`（白名单 16 类 + `selectData` 专节）、
+  `references/spec-format.md`（两端都生成，不必补输入框兜底）、`SKILL.md` / `USAGE.md` 模板说明。
+- 新增 `scripts/render_mobile_preview.py`：移动视图 JSON → 手机版 PNG 预览
+  （看控件有没有漏、按钮名对不对、回填到哪个字段），与 Web 预览器互补。
+- 回归：公文发文移动端 20 → **28 控件**（+8 选取），`MapField` 与 Web 目标字段一一对应；
+  707 预算调整忽略 uuid 后与基线**逐键一致**（`63ec4a74…`），两次重跑自洽。
+
 ## 1.3.7 - 2026-11-28
 
 按「党组发文流程」平台导出件（用户提供）**纠正公文业务模块编码**，补全书签映射与子流程节点认知。

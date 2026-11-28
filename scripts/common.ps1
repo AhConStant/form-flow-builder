@@ -63,6 +63,7 @@ function Copy-RepoToInstallDir {
         'build_export.py',
         'build_flowchart.py',
         'render_web_preview.py',
+        'render_mobile_preview.py',
         'validate_form.py',
         'scan_gray_hints.py',
         'flow_types.py',

@@ -108,7 +108,7 @@
 | 键 | 必填 | 说明 |
 |---|---|---|
 | `label` | 是 | 字段名，照抄源文档 |
-| `type` | 是 | 15 类控件之一，或 `static` / `label` / `selectData` / `blank` |
+| `type` | 是 | 16 类控件之一，或 `static` / `label` / `selectData` / `blank` |
 | `options` | 单选/多选/下拉必填 | 字符串数组，自动转 `[{label,value}]` |
 | `require` | 否 | 单字段覆盖全局必填 |
 | `range` | 否 | 时间范围：写 `true` 时把 `XX起止时间` 自动拆成 `XX开始时间` + 结束控件，中间放原字段名当标题（**不用「至」、结束控件不出标签**，两控件等宽）。字段名含「起止」且类型是 datepicker 时**默认就拆**，不必显式写；写了 `row` 会保留，起止可与科室排进同一行 |
@@ -195,6 +195,11 @@
 
 行内摆位：`selectData` 无标签、只占 `colspan` 格；行末空出来的格子用 `blank` 补满
 （如「主题词 + 选取 + blank×2」「主办科室 + 选取 + blank×4」），否则校验报「空半行」。
+
+**两端都生成**：Web 端落成按钮格（`SheetType:"selectData"`，无标签）；移动端落成独立的
+`selectData` 控件（`class:form_layout_tool_selectData`，`label` = `buttonName` = 「选择+目标字段名」，
+`selDataSet.dataMapping[].MapField` 指回目标字段的 `KM00xx`）。所以 spec 里一个 `selectData` 字段
+在 Web 视图占 1 格、在移动视图占 1 行，**不需要**另外补一个 `input` 兜底。
 
 ## 命令
 

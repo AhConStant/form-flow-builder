@@ -179,6 +179,21 @@ def check_mobile(obj, tpl):
             if fmt not in ("", "￥", "RMB"):
                 errs.append("%s 数字格式 displayFormat 取值可疑: %r（实测 ￥ / RMB / 空）"
                             % (where, fmt))
+        # 数据选取（移动端）：label 必须与 buttonName 同名，且 MapField 指回 KM 号
+        if t == "selectData":
+            pr = e["properties"]
+            if pr.get("label") != pr.get("buttonName"):
+                errs.append("%s 数据选取 label 应与 buttonName 一致（%r ≠ %r）"
+                            % (where, pr.get("label"), pr.get("buttonName")))
+            if pr.get("onlySelectData") is not True:
+                errs.append("%s 数据选取 onlySelectData 应为 true" % where)
+            dm = ((pr.get("selDataSet") or {}).get("dataMapping") or [])
+            if not dm:
+                errs.append("%s 数据选取缺少 selDataSet.dataMapping（选了值回填不到字段）" % where)
+            else:
+                mf = dm[0].get("MapField") or ""
+                if not re.fullmatch(r"KM\d{4}", str(mf)):
+                    errs.append("%s 数据选取 MapField 应为目标字段的 KM00xx，实际 %r" % (where, mf))
         # 条件隐藏：hideFormula 有值时初始态应为 isHidden=true
         if e["properties"].get("hideFormula") and not e["properties"].get("isHidden"):
             errs.append("提示: %s 有 hideFormula 但 isHidden=false（平台实测隐藏字段初始 isHidden=true）"

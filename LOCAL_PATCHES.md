@@ -550,3 +550,45 @@
   逐键比对平台导出件与本地产物：`FlowSet` 108 键、`FlowSetVersion` 101 键、`FlowSetVersionPart` 42 键**完全一致**（只差 ID/名称/时间戳），全文件搜不到「流程管理员」，也没有 13 位权限布尔数组。
   导出件里唯一与权限有关的只有**附件权限**（`FlowParticipant` 2 条 + `FlowExtraOperation` 2 条，`tabCode=AttachAuthor`），这两处本地生成器已经与平台一致。
   → 权限分配只能在平台「编辑流程 → 权限分配」里配，或等平台提供单独的权限导出格式。
+
+## P18 · 移动视图补「数据选取」控件（2026-11-28）
+
+**问题**：`spec` 里写了 8 个 `selectData`（主送/抄送/主题词/会签科室/主办/协办/阅文/抄送个人），
+Web 端有「选取」按钮，**移动端一个都没有**——`build_mobile()` 里直接 `continue` 跳过，
+移动模板（15 类）也没有 `selectData`，手机上只能手打科室名。
+
+**补丁位置**
+
+1. `assets/mobile_view_template.txt`：数组末尾追加 `selectData` 模板（照 **801 收文导出件**
+   `TemplateData.mainView.template.elements` 里 5 个真实节点，去掉 `oldTableKey`/`oldTableName`；
+   `label` 默认「数据选取」、`buttonName` 默认「选择数据」、`selDataSet` 置科室表默认值）。
+   追加后白名单 **16 类**。
+2. `scripts/build_forms.py`：
+   - `MOBILE_TYPES` 末尾加 `"selectData"`；
+   - 新增模块级 `build_sel_dataset(f, bind_of)`，`scell()` 改为调用它（Web/移动共用一份 `selDataSet`）；
+   - 新增 `build_mobile_select_data(f, mby, bind_of)`；`build_mobile(form, mby, require_all, bind_of=None)`
+     里 `selectData` 分支由 `continue` 改为 `out.append(...)`；
+   - 主循环改为**先 `build_web` 再 `build_mobile`**，把 `meta["bind"]` 传进去（`MapField` 要 KM 号）。
+3. `scripts/build_export.py`：同样先 Web 后移动，`build_mobile(..., web_meta.get("bind"))`。
+4. `scripts/validate_form.py` → `check_mobile()` 内、`sn`/`inputNumDisplay` 校验之后：
+```python
+        if t == "selectData":
+            pr = e["properties"]
+            if pr.get("label") != pr.get("buttonName"):
+                errs.append("%s 数据选取 label 应与 buttonName 一致（%r ≠ %r）"
+                            % (where, pr.get("label"), pr.get("buttonName")))
+            if pr.get("onlySelectData") is not True:
+                errs.append("%s 数据选取 onlySelectData 应为 true" % where)
+            dm = ((pr.get("selDataSet") or {}).get("dataMapping") or [])
+            if not dm:
+                errs.append("%s 数据选取缺少 selDataSet.dataMapping（选了值回填不到字段）" % where)
+            else:
+                mf = dm[0].get("MapField") or ""
+                if not re.fullmatch(r"KM\d{4}", str(mf)):
+                    errs.append("%s 数据选取 MapField 应为目标字段的 KM00xx，实际 %r" % (where, mf))
+```
+5. 文档：`references/mobile-schema.md`（16 类 + `selectData` 专节 + 校验清单第 9 条）、
+   `references/spec-format.md`（两端都生成）、`SKILL.md` / `USAGE.md`（模板 16 类）。
+
+**实证要点**：移动端 `selectData` **没有** `bindData`/`SheetType`，`label` = `buttonName`，
+回填靠 `selDataSet.dataMapping[].MapField` = 目标字段 `KM00xx`。别照 Web 单元格的写法硬搬。

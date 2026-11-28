@@ -1218,12 +1218,15 @@ def main(argv):
         print("       · 嵌入现成视图：移动 %d 控件 / Web %d 行（原样，不重建）"
               % (len(els), len([k for k in ext_web.get("rows", {}) if k != "len"])))
 
-    mobile = (None if (reused_tpl is not None or ext_mobile is not None)
-              else build_forms.build_mobile(copy.deepcopy(form), mby, form["require_all"]))
+    # 先出 Web（拿字段 bindData 号），再出移动视图：移动端「数据选取」要把
+    # selDataSet.dataMapping[].MapField 指回目标字段的 KM00xx（照 801 导出件）。
     web_meta = {}
     web = ext_web if ext_web is not None else (
         None if pending else build_forms.build_web(copy.deepcopy(form), wtpl, per_row,
                                                    meta=web_meta))
+    mobile = (None if (reused_tpl is not None or ext_mobile is not None)
+              else build_forms.build_mobile(copy.deepcopy(form), mby, form["require_all"],
+                                            web_meta.get("bind")))
 
     ids = {
         "flow_id": a.flow_id, "template_id": a.template_id,

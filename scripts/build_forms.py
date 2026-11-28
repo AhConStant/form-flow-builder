@@ -37,10 +37,13 @@ TPL_DIR = os.path.join(SKILL_ROOT, "assets")
 MOBILE_TPL = os.path.join(TPL_DIR, "mobile_view_template.txt")
 WEB_TPL = os.path.join(TPL_DIR, "web_view_template.txt")
 
-# 移动控件白名单（= 模板里出现的 15 类）
+# 移动控件白名单（= 模板里出现的 16 类）
+# selectData 照 801 收文导出件 TemplateData.mainView.template 里的真实节点补入：
+# class=form_layout_tool_selectData、name=数据选取、label=buttonName、onlySelectData=true，
+# selDataSet 与 Web 端同构（MapField 仍写目标字段的 KM00xx）。
 MOBILE_TYPES = ["input", "label", "textarea", "radio", "checkbox", "singleCheckbox", "select",
                 "datepicker", "inputNum", "inputNumDisplay", "sn", "table", "approve",
-                "attachment", "selectDep"]
+                "attachment", "selectDep", "selectData"]
 
 # 可带计算式 autoCalc 的类型（平台实测只有这 3 类有该属性）
 FORMULA_TYPES = {"input", "inputNum", "inputNumDisplay"}
@@ -456,14 +459,34 @@ def build_mobile_label(f, mby):
     return e
 
 
-def build_mobile(form, mby, require_all):
+def build_mobile_select_data(f, mby, bind_of):
+    """移动端「数据选取」控件：照 801 收文导出件 `mainView.template` 的真实节点落。
+
+    与 Web 端不同，移动端控件**没有** bindData / SheetType，靠 `selDataSet.dataMapping[].MapField`
+    指回目标字段的 KM00xx。label 与 buttonName 取同一个按钮名（801 实测：
+    label="选择来文单位"、buttonName="选择来文单位"），这样手机上显示的是「选择主送机关」而不是「选取」。
+    """
+    e = copy.deepcopy(mby["selectData"])
+    e["id"] = str(uuid.uuid4())
+    pr = e["properties"]
+    name = f.get("buttonName") or ("选择%s" % (f.get("mapTo") or f["label"]))
+    pr["label"] = name
+    pr["buttonName"] = name
+    pr["isRequire"] = False          # 选取按钮本身不参与必填
+    pr["onlySelectData"] = True
+    pr["selDataSet"] = build_sel_dataset(f, bind_of or {})
+    if not pr["selDataSet"]["dataMapping"][0]["MapField"]:
+        print("  ! 移动视图「%s」的数据选取没拿到目标字段编号（本次没有 Web 视图可分配 KM 号），"
+              "请给 spec 补 mapField 或先出 Web 视图" % name)
+    return e
+
+
+def build_mobile(form, mby, require_all, bind_of=None):
     out = []
     for f in form["fields"]:
         t = f["type"]
         if t in ("static", "blank"):
             continue  # 纯 Web 静态说明（分节标题、表内注）/ 补位空格 移动端省略
-        if t == "selectData":
-            continue  # 数据选取按钮只在 Web 端，移动端仍用纯文本框
         if t not in mby:
             raise ValueError("[%s] 不支持的控件类型: %s（可选: %s）"
                              % (form["base"], t, "/".join(MOBILE_TYPES)))
@@ -473,6 +496,9 @@ def build_mobile(form, mby, require_all):
         if t == "table":
             f["_base"] = form["base"]
             out.append(build_mobile_table(f, mby))
+            continue
+        if t == "selectData":
+            out.append(build_mobile_select_data(f, mby, bind_of))
             continue
         e = copy.deepcopy(mby[t])
         e["id"] = str(uuid.uuid4())
@@ -555,6 +581,37 @@ def build_web_table_cell(c, bind_table, field_no, ncols):
     if not is_auto_column(c) and field_no is not None:
         cell["bindField"] = "KC%04d" % field_no
     return cell
+
+
+def build_sel_dataset(f, bind_of):
+    """数据选取的 `selDataSet`：Web 单元格与移动控件共用同一份结构。
+
+    `mapTo` = 目标字段名，取值写回它的 bindData（KM00xx）；也可直接写 `mapField`。
+    其余 `dataTable` / `dataField` / `multi` / `filter` / `orderField` 按字段给，
+    缺省按科室表（`priDepartment.DepName`）——与 801 收文导出件一致。
+    """
+    target = f.get("mapTo") or ""
+    tname = f.get("mapFieldName") or target or f["label"]
+    data_table = f.get("dataTable") or "priDepartment"
+    return {
+        "canEditLinkText": False,
+        "dataMapping": [{
+            "DataField": f.get("dataField") or "DepName",
+            "DataTpe": "string",
+            "IsShowColumn": True,
+            "MapField": bind_of.get(target) or f.get("mapField") or "",
+            "MapFieldName": tname,
+            "Name": tname,
+        }],
+        "dataSource": 0,
+        "dataTable": data_table,
+        "filterCondition": f.get("filter") or "IsDeleted=0",
+        "isAddToRepeatTable": False,
+        "isMutilSelect": bool(f.get("multi", False)),
+        "orderField": f.get("orderField")
+                     or ("pcsortidscope" if data_table == "priDepartment" else "id"),
+        "table": "",
+    }
 
 
 def build_web(form, wtpl, per_row, meta=None):
@@ -652,10 +709,7 @@ def build_web(form, wtpl, per_row, meta=None):
         其余 `dataTable` / `dataField` / `multi` / `filter` 按字段给，缺省按科室表。
         """
         target = f.get("mapTo") or ""
-        tb = bind_of.get(target) or f.get("mapField") or ""
         tname = f.get("mapFieldName") or target or f["label"]
-        data_table = f.get("dataTable") or "priDepartment"
-        data_field = f.get("dataField") or "DepName"
         btn = f.get("buttonName") or ("选择%s" % tname)
         c = {
             "style": style,
@@ -674,25 +728,7 @@ def build_web(form, wtpl, per_row, meta=None):
             "imageScale": "scale",
             "imageOption": "upload",
             "onlySelectData": True,
-            "selDataSet": {
-                "canEditLinkText": False,
-                "dataMapping": [{
-                    "DataField": data_field,
-                    "DataTpe": "string",
-                    "IsShowColumn": True,
-                    "MapField": tb,
-                    "MapFieldName": tname,
-                    "Name": tname,
-                }],
-                "dataSource": 0,
-                "dataTable": data_table,
-                "filterCondition": f.get("filter") or "IsDeleted=0",
-                "isAddToRepeatTable": False,
-                "isMutilSelect": bool(f.get("multi", False)),
-                "orderField": f.get("orderField")
-                             or ("pcsortidscope" if data_table == "priDepartment" else "id"),
-                "table": "",
-            },
+            "selDataSet": build_sel_dataset(f, bind_of),
             "SheetType": "selectData",
         }
         if merge:
@@ -1218,10 +1254,16 @@ def main():
         # 两段式第二段：拿到表名只补 Web，移动视图第一段已生成，不再重复产出
         skip_mobile = bool(a.web_only
                            or (not a.mobile_only and not form_pending and os.path.exists(mp)))
-        m = None if skip_mobile else build_mobile(form, mby, form["require_all"])
+        # 移动端「数据选取」要拿目标字段的 bindData（KM00xx），编号是 Web 视图发的，
+        # 所以 Web 先算一步（--mobile-only 时算完丢弃，只为拿 meta["bind"]）。
         w = None
-        if not a.mobile_only and not form_pending:
-            w = build_web(form, wtpl, per_row)
+        meta = {}
+        if not form_pending:
+            w_built = build_web(form, wtpl, per_row, meta)
+            if not a.mobile_only:
+                w = w_built
+        m = None if skip_mobile else build_mobile(
+            form, mby, form["require_all"], meta.get("bind"))
         if w is not None:
             errs = validate_form.check_web(w, wtpl)
             hard = [e for e in errs if not e.startswith("提示:")]

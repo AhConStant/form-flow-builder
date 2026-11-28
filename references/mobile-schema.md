@@ -11,7 +11,7 @@ children, class, icon, id, name, properties, type
 生成方式：从 `assets/mobile_view_template.txt` 里同名 `type` 的控件 `copy.deepcopy`，只改 `id` / `properties`。
 **不要手写控件对象**——手写必然丢键或改键序。
 
-## 控件白名单（15 类，与模板一致）
+## 控件白名单（16 类，与模板一致）
 
 | type | 用途 | 移动端渲染 |
 |---|---|---|
@@ -30,6 +30,20 @@ children, class, icon, id, name, properties, type
 | `approve` | 审批意见栏（每栏 = 一个审批节点意见） | 意见框 |
 | `attachment` | 附件上传 | 上传控件 |
 | `table` | 重复表（多行明细） | 子表 |
+| `selectData` | 数据选取（从 DocUnit/priDepartment/主题词表挑值回填目标字段） | 按钮，点开选数据 |
+
+### selectData（移动端，2026-11-28 按 801 收文导出件补入）
+
+`class` = `form_layout_tool_selectData`、`name` = `数据选取`。与 Web 端的三点差异：
+
+1. **没有** `bindData` / `SheetType`，取值靠 `selDataSet.dataMapping[].MapField` 指回目标字段的 `KM00xx`。
+2. `label` 与 `buttonName` 写**同一个按钮名**（801 实测：`选择来文单位`），不要写「选取」——
+   移动端把 `label` 当行标题，写「选取」屏幕上就是一串分不清的「选取」。
+3. `isRequire` = `false`（按钮本身不参与必填），`onlySelectData` = `true`。
+
+`selDataSet` 与 Web 端**同构**（`dataTable`/`dataMapping[{DataField,DataTpe,IsShowColumn,MapField,MapFieldName,Name}]`/
+`filterCondition`/`isMutilSelect`/`orderField`），由 `build_sel_dataset()` 一份代码同时供两端。
+`MapField` 取自 Web 视图发的字段号，所以生成顺序必须是**先 Web 后移动**。
 
 ## properties
 
@@ -43,6 +57,7 @@ children, class, icon, id, name, properties, type
 | `singleCheckbox` | `chkSelectValue`、`chkUnSelectValue` |
 | `sn` | `snFormula`、`snMode` |
 | `inputNumDisplay` | `autoCalc`（模板已带） |
+| `selectData` | `selDataSet`（模板已带；`label`=`buttonName`、`onlySelectData:true`） |
 
 - **按需出现的可选键**（模板基准里没有，出现即合法，必须按字母序插入；写法见 `formulas.md`）：
 
@@ -107,11 +122,12 @@ children, class, icon, id, name, properties, type
 
 1. 文件头 3 字节为 BOM，JSON 可解析，单行。
 2. 每个元素 7 个基准键且顺序正确；可选键 `bindData`/`oldTableKey`/`oldTableName` 允许出现。
-3. `type` 在白名单内（15 类）。
+3. `type` 在白名单内（16 类）。
 4. `properties` 基准键不缺、无臆造键（可选键仅限 `autoCalc`/`hideFormula`/`snFormula`/`snMode`/`isBuildByCode`）。
 5. `id` 非空且唯一。
 6. `isRequire` 是布尔值。
 7. `table` 的列不含 `class`/`icon`，且含 `showLabel`。
 8. `sn` 的 `snMode` = 元素自身 `id`；`inputNumDisplay` 的 `displayFormat` ∈ `{空, ￥, RMB}`。
+9. `selectData` 的 `label` = `buttonName`、`onlySelectData` = `true`、`selDataSet.dataMapping` 非空且 `MapField` 为 `KM00xx`。
 
 `scripts/validate_form.py` 已覆盖以上全部检查。
