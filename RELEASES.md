@@ -6,6 +6,30 @@
 - 次版本：新增能力、新增参考文档、兼容现有用法。
 - 修订号：缺陷修复、脚本稳定性、规则补充。
 
+## 1.3.7 - 2026-11-28
+
+按「党组发文流程」平台导出件（用户提供）**纠正公文业务模块编码**，补全书签映射与子流程节点认知。
+纯文档版本，不改生成逻辑。
+
+- **G1 纠错（重要）**：`docSend` 是早期推断值，**任何导出件里都没出现过，已废弃**。
+  实证值：收文 `modCode=docRec` / `FlowKindID=17`（801）；**党组发文 `doc` / `24`**（本件）。
+  `modeDes=wm` 两件一致。行政发文的编码仍未知，需该流程自己的导出件确认。
+- 书签映射扩成「两件并集」表：新增 **主送 `SendGov`**（早期猜的 `ToGov` 是错的）、
+  **附件说明 `Note`**（801 是 `Adjunct`，按表单实际字段写）、签发/会签两条 `FormField=null`；
+  并写明「用 `sqlDicType` 字典的下拉不加 `_Value`」。
+- `references/flow-export.md` 新增「发文流程实例（党组发文）」：
+  - 10 节点 / 11 连线，**有并行（4→5,6）也有环（5↔8 会签）**；
+  - **`nodeFlowChild` / `ActionTypeID=16` = 子流程节点**（`stepName=子流程`，带 16 个 `flowTo*` 键）；
+  - `tabCode` 实际值：`FixedUser` / **`ExtraOperation_AttachAuthor`** / `ExtraOperation_FormPrint`
+    （早期记的 `AttachAuthor` 不准确）；
+  - `partOptionCode` 新枚举：`Initiator` / `LeaderOfInitiator` / `BOfInitiator` / `Role`；
+  - `sheet.approves` 的 **`approveMode`：签发 `qf`、会签 `hq`**；
+  - `FlowFormSet` 39 条一律 `FixedFormSet`，选项字段带 `_Value`；
+  - 控件：`button` + `btnClickMode`（`changeVisible` / `zdfy-pdf`）、
+    `select` + **`sqlDicType`**（`CommonUrgent` / `CommonSecret`）——**两项生成器均不支持**。
+- 能力边界（明确记下，别硬做）：子流程节点、5↔8 这类回环、`sqlDicType` 下拉、功能 `button`，
+  当前生成器都不支持，遇到时在交付说明里写「需在设计器里加」。
+
 ## 1.3.6 - 2026-11-28
 
 规则清单**按适用范围分家**，并把原先散落在 `SKILL.md` 里的硬约束收编成正式编号。

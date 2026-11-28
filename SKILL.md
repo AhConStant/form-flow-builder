@@ -31,8 +31,9 @@ agent_created: true
 | **「生成表单」**（有重复表） | 第一段 `scripts/build_export.py spec.json` → 第二段 `scripts/build_forms.py spec.json --table-name ... --web-only` | 第一段一个 `流程导出_{base}_v1.0_移动视图.json`（sheet 空）；第二段**只一份** `{base}(Web视图).txt` | **第一段不出 txt**；**第二段不重打整包、不重建移动视图** |
 | **「生成表单流程」** | 同上两段式（无重复表时可一条 `build_export.py` 出全） | 无重复表：一个 `流程导出_{base}_v1.0.json`；有重复表：第一段 JSON（sheet 空）+ 第二段仅 Web 视图 txt | **不额外出配置清单**；有重复表时第二段**不要**再出整包 JSON |
 
-> **公文表单（09 公文截图）**：截图左上角红框写「发文信息」→ 业务模块 = **发文流程**
-> （spec 写 `"modCode": "docSend"`、`"flowKindID": 17`）；红框写「收文信息」→ `docRec`。
+> **公文表单（09 公文截图）**：截图左上角红框写「发文信息」→ 业务模块 = **发文流程**；
+> 红框写「收文信息」→ **收文流程**。编码按导出件实证：收文 `docRec` + `17`、
+> **党组发文 `doc` + `24`**。`docSend` 是早期推断值，任何导出件都没出现，**已废弃**。
 > 截图里带「**选取**」按钮的格子一律写成 `selectData` 字段（`mapTo` 指回填字段，
 > `dataTable`/`dataField` 照 801 收文导出件：科室 `priDepartment/DepName`、单位 `DocUnit/Name`、
 > 人员 `priUser/UserName`），行末用 `blank` 补满列；再补 `bookmarks` 把字段绑到

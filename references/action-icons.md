@@ -176,7 +176,7 @@
 
 | # | 规则 | 来源 |
 |---|---|---|
-| G1 | 左上角红框是**「发文信息」→ 业务模块选发文流程**（`modCode=modeCode=docSend`）；收文 → `docRec`；`modeDes=wm`、`FlowKindID=17`；同时置 `TemplateData.isFromFlow=true`。**`docSend` / `17` 为推断值，导入后需在平台核对** | 用户 11-28 硬规则 |
+| G1 | 左上角红框是**「发文信息」→ 业务模块选发文流程**，收文 → 收文流程。编码**按导出件实证取值**：收文 `modCode=modeCode=docRec` / `FlowKindID=17`（801 收文）；**党组发文 `doc` / `24`**（党组发文导出件）。`modeDes=wm` 两件一致，同时置 `TemplateData.isFromFlow=true`。**`docSend` 未在任何导出件中出现过，已废弃**——行政发文若与党组发文不同，需再给一份该流程的导出件确认 | 801 + 党组发文实测 |
 | G2 | 截图里有**「选取」按钮**的，必须生成**数据选取控件**：`SheetType:"selectData"` + `buttonType:"selectdata"` + `selDataSet{dataTable, dataMapping[{DataField,MapField,MapFieldName,Name}], isMutilSelect, filterCondition, orderField}`，按钮格自占一个 `bindData`；设置照 801 收文流程 | 用户 11-28 硬规则 |
 | G3 | 公文属性书签 `TemplateData.docUsedBookmarkList`：`Title`/`DocType`/`Urgent`/`Secret`/`AttNum`/`CcGov`/`Keyword`/`Adjunct`/`UserName`/`CDate`，选项字段追加 `_Value`（`UrgentID`/`SecretID`） | 801 实测 |
 

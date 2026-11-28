@@ -42,9 +42,9 @@
 | `base` | 是 | 输出文件前缀，同时是流程标识（如 `01发文流程`） |
 | `title` | 是 | 表单标题 = Web 标题行文字 |
 | `cols` | 否 | Web 视图列数，默认 **6**（平台标准）。源表是 7 列（如「申请人 + 跨4列输入 + 申请科室 + 输入」）时写 `7`，`row` 的 `colspan` 总和不能超过它 |
-| `modCode` | 否 | **业务模块编码**（导出包 `FlowSet.modCode`/`modeCode`）。公文类必写：收文 `docRec`、发文 `docSend`；不写落平台默认 `wm`（通用），公文属性在列表里都不显示 |
+| `modCode` | 否 | **业务模块编码**（导出包 `FlowSet.modCode`/`modeCode`）。公文类必写，按导出件实证取：收文 `docRec`、**党组发文 `doc`**；不写落平台默认 `wm`（通用），公文属性在列表里都不显示。~~`docSend`~~ 是早期推断值，已废弃 |
 | `modeDes` | 否 | 业务模块大类，默认 `wm`（公文）；收文/发文导出件里都是 `wm` |
-| `flowKindID` | 否 | 流程分类 ID：表单流程 `9`（默认）、**公文流程 `17`**（801 收文导出件实测） |
+| `flowKindID` | 否 | 流程分类 ID：表单流程 `9`（默认）、**收文 `17`**（801 实测）、**党组发文 `24`**（党组发文实测）。不同公文模块编号不同，不要按「公文=17」套 |
 | `bookmarks` | 否 | 公文「表单字段 → 公文属性」映射，见下方「公文流程」。`[{"label":"公文标题","formField":"Title","value":false}]`，`value:true` 时另出一条 `KM00xx_Value`（选项字段用） |
 | `fields` | 是 | 字段数组，顺序即表单顺序 |
 | `nodes` | 否 | 流程节点清单，写进 `(配置清单).md` |
@@ -163,15 +163,35 @@
 
 公文类表单跟普通表单的差别只有三处，其余照旧：
 
-1. **业务模块**：截图左上角红框是 `发文信息` → 业务模块 = 发文流程，写
-   `"modCode": "docSend"`, `"flowKindID": 17`；若红框是 `收文信息` → `docRec`。
+1. **业务模块**：截图左上角红框是 `发文信息` → 业务模块 = 发文流程；`收文信息` → 收文流程。
+   编码按导出件实证：**收文 `docRec` + `flowKindID 17`**、**党组发文 `doc` + `flowKindID 24`**。
+   `docSend` 是早期推断值（任何导出件都没出现），已废弃；行政发文编码未知，需导出件确认。
 2. **数据选取控件**：截图里带「选取」按钮的格子，一律写成 `selectData` 字段（不是静态文字）。
    结构照平台导出件（801 收文流程），落成 `SheetType:"selectData"` + `buttonType:"selectdata"` +
    `selDataSet{dataTable,dataMapping[{DataField,MapField,MapFieldName,Name}],isMutilSelect,...}`。
    单元格文字写 `选取`，`bindData` 自己占一个号（平台按格发号，不影响取值）。
-3. **书签映射**：`bookmarks` 写进 `TemplateData.docUsedBookmarkList`，把表单字段绑到公文属性
-   （`Title`/`DocType`/`Urgent`/`Secret`/`AttNum`/`CcGov`/`Keyword`/`Adjunct`/`UserName`/`CDate`），
-   选项字段再加 `value:true` 落一条 `UrgentID`/`SecretID`。
+3. **书签映射**：`bookmarks` 写进 `TemplateData.docUsedBookmarkList`。**属性名固定、`formField`
+   随表单实际字段变**，不是固定那 10 条。两份导出件的并集：
+
+   | 公文属性（`label`） | `formField` | 出处 / 差异 |
+   |---|---|---|
+   | 标题 | `Title` | 两件一致 |
+   | 文号 / 来文字号 | `ZiHao` | 801 叫「来文字号」，党组发文叫「文号」，字段名都是 `ZiHao` |
+   | 公文种类 | `DocType` | 801 |
+   | 紧急程度 | `Urgent`（+ `value:true` → `UrgentID`） | 801 |
+   | 密级 | `Secret`（+ `value:true` → `SecretID`） | 801 |
+   | 主送 | **`SendGov`** | 党组发文实测（早期猜的 `ToGov` 是错的） |
+   | 抄送 | `CcGov` | 两件一致 |
+   | 附件份数 | `AttNum` | 801 |
+   | 附件说明 | **`Note`**（党组发文）/ `Adjunct`（801） | 两份字段名不同，按表单实际写 |
+   | 主题词 | `Keyword` | 801 |
+   | 登记人 / 拟稿人 | `UserName` | 两件同字段名，只是显示名不同 |
+   | 登记时间 / 拟稿时间 | `CDate` | 同上 |
+   | 收文编号 | `BianHao` | 801 收文专用 |
+   | 签发 / 会签 | 空 | 党组发文有这两条，`FormField` 与 `DataMapField` 都是 `null`（只声明属性，不绑字段） |
+
+   选项字段才加 `value:true`（落 `KM00xx_Value`）；**用 `sqlDicType` 字典的下拉不加**
+   ——党组发文的紧急程度/密级就是普通 `select` + `sqlDicType`，书签直接写 `KM0003`/`KM0004`。
 
 行内摆位：`selectData` 无标签、只占 `colspan` 格；行末空出来的格子用 `blank` 补满
 （如「主题词 + 选取 + blank×2」「主办科室 + 选取 + blank×4」），否则校验报「空半行」。

@@ -352,12 +352,15 @@ python scripts/build_export.py spec.json --base-export "流程导出_模板.json
 
 `FlowSet` 与 `FlowSetVersion` 上各有一组：
 
-| 字段 | 801 收文 | 707 普通表单 | 含义 |
-|---|---|---|---|
-| `modCode` | `docRec` | `wm` | **业务模块编码**（收文 = docRec，发文 = docSend） |
-| `modeCode` | `docRec` | `wm` | 同上，平台两处都读 |
-| `modeDes` | `wm` | `wm` | 大类，公文固定 `wm` |
-| `FlowKindID` | `17` | `9` | 流程分类：公文 17、普通表单 9 |
+| 字段 | 801 收文 | 党组发文 | 707 普通表单 | 含义 |
+|---|---|---|---|---|
+| `modCode` | `docRec` | **`doc`** | `wm` | **业务模块编码**（按导出件实证，别猜） |
+| `modeCode` | `docRec` | `doc` | `wm` | 同上，平台两处都读 |
+| `modeDes` | `wm` | `wm` | `wm` | 大类，公文固定 `wm` |
+| `FlowKindID` | `17` | **`24`** | `9` | 流程分类 ID：收文 17、党组发文 24、普通表单 9 |
+
+> **`docSend` 是早期推断值，任何导出件里都没出现过，已废弃**。行政发文若与党组发文不同，
+> 需再拿一份该流程的导出件确认编码，不要凭对称关系猜。
 
 不写就落 `wm`/`9`，导入后流程挂在「通用」下，公文属性（文号/密级/主题词）列表里都不显示。
 
@@ -420,6 +423,90 @@ python scripts/build_export.py spec.json --base-export "流程导出_模板.json
 801 收文单共 15 行 6 列：来文字号（带取号）、来文机关（+选取）、公文标题、收文编号/来文日期/收文日期、
 公文种类/紧急程度/密级、附件份数、抄送机关、主题词（+选取）、主办/协办/阅文科室（各带选取）、
 附件说明、登记人/登记时间、附件文件（`uploadMode: "swfj"`）。
+
+## 发文流程实例（党组发文流程，用户 2026-11-28 提供）
+
+规模：**10 节点 / 11 连线 / 0 判断 / 0 条件**。与 801 收文的差别是「有并行、有环、有子流程节点」。
+
+| Draw | actualName | node | ActionTypeID | 执行人（FlowParticipant） |
+|---|---|---|---|---|
+| 1 | 开始 | nodeStart | 0 | — |
+| 2 | 拟稿 | nodeFirst | **-1** | — |
+| 3 | 核稿人核稿 | nodeNotice | 3 | `Initiator`（流程发起人） |
+| 4 | 党委组织部负责人签发 | nodeNotice | 3 | `LeaderOfInitiator`（发起人部门负责人） |
+| 5 | 党委组织部文件管理员流转 | nodeNotice | 3 | `BOfInitiator`（发起人部门文件管理员） |
+| 6 | 拟稿人校对 | nodeNotice | 3 | `Initiator` |
+| 7 | 委组织部文件管理员核发 | nodeNotice | 3 | `Role`（角色：党办发文管理，带 `RoleID`） |
+| 8 | 相关处室会签 | **nodeFlowChild** | **16** | — |
+| 9 | 归档 | nodeAction | **4** | — |
+| 10 | 结束 | nodeEnd | 1 | — |
+
+### 1. 拓扑里有并行、也有环
+
+```
+1 开始 → 2 拟稿 → 3 核稿 → 4 签发 ─┬→ 5 管理员流转 ─┬→ 6 校对 → 7 核发 → 9 归档 → 10 结束
+                                  └→ 6 校对        └→ 8 会签(子流程) ──┐
+                                                        ↑              │
+                                                        └────── 5 ←────┘
+```
+
+`processPrev` / `processTo` 实际值（照抄，别按线性顺序推）：
+
+| Draw | processPrev | processTo |
+|---|---|---|
+| 4 | `3` | `5,6` |
+| 5 | `4,8` | `6,8` |
+| 6 | `4,5` | `7` |
+| 8 | `5` | `5` |
+
+→ **同一个节点可以既是某节点的后继、又是它的前驱**（5 ↔ 8 会签回环）。生成器现在只支持
+`parallel:true` 的分流/合流，**不支持这种回环**；要做这类流程得手工在平台里加子流程节点。
+
+### 2. `nodeFlowChild` = 子流程节点（新类型）
+
+`stepName = 子流程`、`node = nodeFlowChild`、`ActionTypeID = 16`、`nodeGroup = nodeFlowChild`。
+带一组 `flowTo*` 键（16 个，`flowToCirMode`/`flowToNoticeMode`/`flowToPortletInfoAttMode`…）
+配置子流程结束后怎么流转，还有 `freeIsParticChange` / `freeParticRequired` / `freeSerialParaMode`
+（自由选人相关）。`nodeIcon` 是 `green el-icon-success i ep:success-filled`。
+
+### 3. 执行人写法（`FlowParticipant` + `tabCode`）
+
+`FlowStepPart` 10 条**全是空对象**，执行人实际写在 `FlowParticipant`：
+
+| tabCode | 用途 | `partOptionCode` |
+|---|---|---|
+| `FixedUser` | 节点执行人 | `Initiator` / `LeaderOfInitiator` / `BOfInitiator` / `Role`（带 `RoleID`+`roleName`）/ `User` / `LeaderOfDept` |
+| `ExtraOperation_AttachAuthor` | 附件权限 | `AllUser`（所有人）/ `Initiator`（发起人） |
+| `ExtraOperation_FormPrint` | 表单打印权限 | `AllUser` |
+
+> 早期记的 `tabCode=AttachAuthor` 不准确，实际是 **`ExtraOperation_AttachAuthor`**。
+
+### 4. 表单设置（`FlowFormSet`）
+
+39 条，按节点分组：拟稿 28、核稿 2、签发 1、校对 3、核发 5（**流转 5 与会签 8 没有条目**）。
+`tabCode` 一律 `FixedFormSet`；选项字段带 `_Value` 变体（`KM0003_Value` 紧急程度(值)）。
+
+### 5. 意见框（`sheet.approves`）
+
+只有 2 个：`{"approveName":"签发","approveMode":"qf"}`、`{"approveName":"会签","approveMode":"hq"}`。
+`approveMode` 区分**签发（qf）/ 会签（hq）**，普通「审核意见」不带这个值。本地生成器目前不写 `approveMode`。
+
+### 6. 表单控件（本件出现的、生成器不支持的）
+
+| 业务 | SheetType | 关键键 | 生成器 |
+|---|---|---|---|
+| 红色标题行（「党组发文笺」） | — | `styles[1] color:#fe0000`、字号 22 | 支持（静态） |
+| 附件列表按钮 | `button` | `btnClickType:"ModeEvent"`、`btnClickMode:"changeVisible"` | ❌ 不支持 |
+| 查看正文按钮 | `button` | `btnClickType:"ModeEvent"`、`btnClickMode:"zdfy-pdf"` | ❌ 不支持 |
+| 紧急程度 / 密级下拉 | `select` | **`sqlDicType:"CommonUrgent"` / `"CommonSecret"`**（平台内置字典，`options` 只有一个空项） | ❌ 不支持 |
+| 登记/拟稿时间 | `datepicker` + `time` | `dateTimeType` | 支持 |
+| 意见框 | `approve` + `approve` | `merge:[0,4]`、`chkName`、`bindData` | 支持 |
+
+### 7. 三处老特征，同样不照抄
+
+1. `归档` 留成 `nodeAction` / `ActionTypeID=4` —— 按 R15 应折叠。
+2. `optStep` **全部空串**（包括审批/通知节点）—— 按 R17 非判断写 `"1"`。
+3. 申请人 `ActionTypeID=-1`、结束 `1` —— 新包按 0 写，平台按 `node` 判类型。
 
 ## 限制
 

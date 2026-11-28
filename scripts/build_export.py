@@ -1141,7 +1141,7 @@ def patch_skeleton(base, form, steps, cons, parts, ids, conditions=None):
     fe["FlowSetVersionPart"]["FlowID"] = flow_id
     fe["FlowSetVersionPart"]["ID"] = ids["version_id"]
 
-    # 业务模块：平台导出件里是 modCode/modeCode（收文=docRec、发文=docSend），
+    # 业务模块：平台导出件里是 modCode/modeCode（收文=docRec / 17、党组发文=doc / 24），
     # 不写就落到通用 'wm'，公文属性（文号/密级/主题词）在列表里都不显示
     mc = (form.get("modCode") or "").strip()
     if mc:
