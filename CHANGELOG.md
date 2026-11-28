@@ -1,7 +1,31 @@
 # 版本记录
 
-> 本文件是**上游技能包**的版本历史（最新 1.19.1），不是本仓库的发布版本。
+> 本文件是**上游技能包**的版本历史（最新 1.19.2），不是本仓库的发布版本。
 > 本仓库的发布版本见 `VERSION` / `RELEASES.md`（当前 1.0.2）；仓库版本与技能包版本的对应关系见 `SKILL_VERSION`。
+
+## 1.19.2 · 2026-11-27
+
+### 修复 · 并行分支缺「分流 / 合流」结构节点
+
+- **并行会签导出后流程图不对**：原来只把两条出线挂在同一个节点上，平台不认并行，导入后缺结构、
+  节点也没有 `Shunt*` 属性。新增 `build_export.insert_shunt_converg()`：
+  非判断节点出线 >1 自动插「分流（`nodeIsShunt`/14）」，入线 >1 自动插「合流（`nodeToConverg`/15）」，
+  并写好 `ShuntFirstID` / `ShuntParentID` / `shuntChildren` / `shuntLayer`、`processPrev` / `processTo`。
+- `flow_types.TYPE_META` 新增 `shunt` / `converg`；`classify()` 的 `_SPECIAL` 认「分流」「合流」
+  （原来「分流」会命中条件判断的关键词）。
+- `importantShunt` 改为**穿过结构节点**写业务上的下一步（新增 `business_next()`）：
+  保卫科负责人审批写 `"6,7"`（分支）、人事科会签写 `"8"`（合流之后），不写分流/合流的 DrawID。
+- 分流/合流按实测另设一套默认键 `SHUNT_CONVERG_OVERRIDES`（无人员结构节点）：
+  `singleApprove=0`、`agreePercent=0.0`、`selUserRange=2`、`unFinishedActive=1`、
+  `isCanAssist=False`、`isCanDirectDelivery=True`、`flowTriggerSetMode=0`…；
+  且导出件里去掉 `note` 键、`nodeIcon` 不带普通节点那个尾随空格。
+- `processPrev` 多前驱写全（合流是 `"6,7"`，原来只写第一个前驱）。
+- 终端摘要改按「业务链路」打印（`_chain_rows()` 把结构节点折回连线），不再出现「结束 → 分流」这种顺序。
+
+### 验证
+
+- 用停车优惠申请表的 spec 重新生成，与用户平台改好的导出件逐键比对：
+  **除号段（DrawID/StepID/FlowID）与坐标 `nodeStyle` 外零差异**，节点集合与连线拓扑完全一致。
 
 ## 1.19.1 · 2026-11-24
 

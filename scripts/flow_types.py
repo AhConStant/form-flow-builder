@@ -36,6 +36,14 @@ TYPE_META = {
                 "kind": "action", "verified": True},
     "judge":   {"label": "条件判断", "node": "nodeJudge", "action_type": 6,
                 "kind": "judge", "verified": True},
+    # 并行分支必须显式落成「分流 / 合流」两个结构节点（2026-11-27 平台实测样本）：
+    #   前驱 → 分流(14) → 各并行节点(ShuntFirstID/ShuntParentID/shuntChildren/shuntLayer=1)
+    #        → 合流(15, ShuntParentID=分流DrawID) → 后继
+    # 只把两条线挂在同一个节点上，平台不认并行，导入后流程图缺结构、节点也没有 Shunt* 属性。
+    "shunt":   {"label": "分流", "node": "nodeIsShunt", "action_type": 14,
+                "kind": "shunt", "verified": True},
+    "converg": {"label": "合流", "node": "nodeToConverg", "action_type": 15,
+                "kind": "converg", "verified": True},
     "archive": {"label": "存档", "node": None, "action_type": None,
                 "kind": "archive", "verified": False},
     "doc":     {"label": "生成处理签", "node": None, "action_type": None,
@@ -69,7 +77,8 @@ _RULES = [
 
 _SPECIAL = {"开始": "start", "发起": "start", "begin": "start",
             "申请人": "first", "发起人": "first", "填报人": "first",
-            "结束": "end", "完成": "end", "end": "end"}
+            "结束": "end", "完成": "end", "end": "end",
+            "分流": "shunt", "合流": "converg"}
 
 
 def classify(name):

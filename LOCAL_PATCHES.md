@@ -447,6 +447,40 @@
 **注意**：`docSend`、`priUser`、`ToGov`（主送机关的公文属性字段名）都属推断，
 主送机关暂**没写进书签**（收文没有主送，无样本），等用户确认字段名再补。
 
+## P15 · 并行分支只在显式标记时插「分流 / 合流」（2026-11-28，对应上游 1.19.2）
+
+**问题**：上游 1.19.2 的 `insert_shunt_converg()` 按「非判断节点出线 >1」自动插分流/合流。
+09 流程里这类节点几乎都是**二选一**：
+
+- 审批节点 → `[下一步, 返回修改]`（如公文发文 8/9/10/11）；
+- `申请部门负责人审批` → `[无协同科室→下一步, 有协同科室→协同科室审批]`（707 的 2.1.1）。
+
+707 实测自动插：34 节点被撑到 **38**，多出 2 个坐标重合的合流，平台里会变成真并行。
+
+**补丁位置**
+
+1. `scripts/build_export.py` → `insert_shunt_converg(rows, labels=None, only=None)`：
+   - `only` 为空直接返回（**默认关闭**）；
+   - 分支再过滤：`d["y"] <= f["y"] + 1`（往回走=退回边）、名字/连线文字含
+     `返回/退回/终止/结束/不同意/作废/撤销/错误` 的都不算并行；
+   - 不足 2 条并行分支就跳过；
+   - 非并行出线（退回）保持直连：`f["to"] = [分流] + rest`；
+   - 分支改接到合流时，把 `(分支名, 原目标名)` 的连线文字搬到 `(分支名, "合流")`。
+2. `scripts/build_export.py` → `build_steps()` 里：
+   ```python
+   _only = {n["name"] for n in ((form.get("graph") or {}).get("nodes") or [])
+            if isinstance(n, dict) and n.get("parallel")}
+   rows, _parallel, _moved = insert_shunt_converg(rows, labels, only=_only)
+   ```
+3. spec 侧：真正并行的分叉节点写 `"parallel": true`（公文发文：`12 院领导签发`）。
+
+**核对基准**（公文发文，2026-11-28）：分流 draw=17 parent='' children=False layer=0；
+合流 draw=18 parent='17' children=True layer=1 → 16 结束；13/14 的 `ShuntFirstID` 为自身、
+`ShuntParentID=17`；`12.processTo = "17,15"`（分流 + 申请人复核，退回边没被吞）。
+
+**上游另外两处不采用**：骨架删 `flowCode`/`udfName`（本地保留）；`build_flowchart.py`
+沟槽/回退边/判断横向出口的修正不退回旧写法。
+
 ## 无法通过本技能实现的部分（记下来，别再试）
 
 - **流程「权限分配」页（授权对象 / 监控权限 13 项 / 知会权限）不在 `流程导出_*.json` 里**。

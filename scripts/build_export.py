@@ -455,6 +455,189 @@ def fold_action_nodes(rows):
     return keep, labels, redirect
 
 
+# 分流/合流节点的键值与普通节点不同（2026-11-27 平台实测样本）：
+# 它们是「无人员、无表单」的结构节点，平台给的是另一套默认值。
+# 普通节点是 singleApprove=10 / agreePercent=100.0 / selUserRange=1 / unFinishedActive=0 …
+SHUNT_CONVERG_OVERRIDES = {
+    "singleApprove": 0,
+    "agreePercent": 0.0,
+    "negativePercent": 0.0,
+    "selUserRange": 2,
+    "signUpRange": 2,
+    "signUpInfluenceTrend": 2,
+    "signUpApproveUidMode": 0,
+    "unFinishedActive": 1,
+    "unFinishedNotify": 9,
+    "agentOneFinishedNotify": 9,
+    "agentOriginFinishedNotify": 9,
+    "agentUnFinishedNotify": 9,
+    "flowTriggerSetMode": 0,
+    "flowToNoticeMode": 1,
+    "flowToNoticeAttMode": 1,
+    "flowToNoticeFormMode": 1,
+    "flowToCirMode": 1,
+    "flowToCirAttMode": 1,
+    "isCanAssist": False,
+    "isCanDirectDelivery": True,
+    "isCanEntrust": False,
+    "isCanSignUp": False,
+}
+
+# 「例外出口」的名字特征：退回修改 / 终止 / 流程结束 —— 这些不是并行分支。
+_EXIT_WORDS = ("返回", "退回", "终止", "结束", "不同意", "作废", "撤销", "错误")
+
+
+def _is_exit_branch(name, label=""):
+    """退回 / 终止类的出线：不是并行分支，插了分流平台会当成两条并行线。"""
+    text = "%s %s" % (name or "", label or "")
+    return any(w in text for w in _EXIT_WORDS)
+
+
+def business_next(draws, by_draw):
+    """业务上的「下一步」：跳过 分流/合流 这两个结构节点。
+
+    平台导出件里 importantShunt（「同意执行」的默认目标）不写结构节点：
+    保卫科负责人审批 → 分流 → 两个分支，写的是 "6,7"；人事科会签 → 合流 → 分管院领导，写的是 "8"。
+    """
+    out = []
+    for t in draws or []:
+        r = by_draw.get(t)
+        if r is not None and r.get("key") in ("shunt", "converg"):
+            for x in business_next(r.get("to") or [], by_draw):
+                if x not in out:
+                    out.append(x)
+        elif t not in out:
+            out.append(t)
+    return out
+
+
+def insert_shunt_converg(rows, labels=None, only=None):
+    """并行分支落成「分流(nodeIsShunt/14) + 合流(nodeToConverg/15)」两个结构节点。
+
+    2026-11-27 平台实测（停车优惠申请表，人事科会签 ∥ 财务科会签）：
+    只把两条出线挂在同一个节点上，平台不认并行——导入后流程图缺结构、
+    节点属性里也没有 Shunt* 一组键。
+
+    **只给显式声明的分叉节点插**（`graph.nodes[].parallel: true`）：
+    09 流程里审批节点的两条出线绝大多数是「同意 / 返回修改」或「有协同科室 / 无协同科室」
+    这类二选一，靠拓扑分不出来（707 实测：自动插会把二选一误判成并行，
+    34 节点被撑到 38，还多出两个重合的合流）。所以默认关闭，标记了才插。
+
+    标记后仍只把同时满足下面三条的分支算并行：
+
+      1. 目标在当前节点**下方**（y 更大）——往回走的是退回边；
+      2. 目标名/连线文字不含 返回/退回/终止/结束… 这类例外出口词；
+      3. 至少两条这样的分支。
+
+    其余出线（退回、终止）保持原样直连，不塞进分流。
+
+    返回 (rows, [(分流row, 合流row或None, [分支draw…])], {(源名, 原目标名): 新目标名})；
+    第三个表给连线文字用——分支改接到合流后，原来压在边上的执行动作文字要跟着搬。
+    """
+    labels = labels if labels is not None else {}
+    only = set(only or ())
+    if not rows or not only:
+        return rows, [], {}
+    by_draw = {r["draw"]: r for r in rows}
+
+    def indeg(d):
+        return sum(1 for r in rows if d in (r.get("to") or []))
+
+    def reach(d):
+        seen, stack = set(), list(by_draw[d].get("to") or [])
+        while stack:
+            x = stack.pop()
+            if x in seen or x not in by_draw:
+                continue
+            seen.add(x)
+            stack.extend(by_draw[x].get("to") or [])
+        return seen
+
+    nxt = max([r["draw"] for r in rows] or [0]) + 1
+    made, moved = [], {}
+    for f in [r for r in rows
+              if len(r.get("to") or []) > 1 and r.get("key") != "judge"]:
+        if f["name"] not in only and strip_no(f["name"]) not in only:
+            continue
+        par = []
+        for t in f["to"]:
+            d = by_draw.get(t)
+            if not d:
+                continue
+            if d["y"] <= f["y"] + 1:                    # 同层或往上：退回 / 例外出口
+                continue
+            if _is_exit_branch(d["name"], labels.get((f["name"], d["name"]), "")):
+                continue
+            par.append(t)
+        if len(par) < 2:
+            continue
+
+        s = {"draw": nxt, "name": "分流", "label": "分流", "key": "shunt",
+             "kind": "shunt", "x": f["x"], "y": f["y"] + 60, "to": list(par)}
+        nxt += 1
+        # 原出线里非并行的（退回/终止）继续直连，分流只接管并行那几条
+        rest = [t for t in f["to"] if t not in par]
+        f["to"] = ([s["draw"]] if not rest else
+                   [s["draw"]] + rest)   # 分流在前，「同意」默认走并行段
+        rows.append(s)
+        by_draw[s["draw"]] = s
+
+        # 汇聚点 = 各并行分支共同可达、入线 >1、且在分流下方的第一个非判断节点
+        common = None
+        for b in par:
+            rb = reach(b)
+            common = rb if common is None else (common & rb)
+        target = None
+        for d in sorted(common or []):
+            if (indeg(d) > 1 and by_draw[d].get("key") != "judge"
+                    and by_draw[d]["y"] > s["y"]):
+                target = by_draw[d]
+                break
+
+        m = None
+        if target:
+            m = {"draw": nxt, "name": "合流", "label": "合流", "key": "converg",
+                 "kind": "converg", "x": target["x"], "y": target["y"] - 60,
+                 "to": [target["draw"]], "_shunt_parent": s["draw"],
+                 "_shunt_children": True, "_shunt_layer": 1}
+            nxt += 1
+            rows.append(m)
+            by_draw[m["draw"]] = m
+            for b in par:
+                bd = by_draw[b]
+                if target["draw"] in (bd.get("to") or []):
+                    bd["to"] = [x for x in bd["to"] if x != target["draw"]] + [m["draw"]]
+                    old = (bd["name"], target["name"])
+                    if old in labels:            # 边上的执行动作文字跟着搬到合流
+                        moved[old] = m["name"]
+                bd["_shunt_first"] = bd["draw"]
+                bd["_shunt_parent"] = s["draw"]
+                bd["_shunt_children"] = True
+                bd["_shunt_layer"] = 1
+        made.append((s, m, par))
+    return rows, made, moved
+
+
+def _chain_rows(rows):
+    """打印用的业务链路：把分流/合流折回普通连线，终端摘要里不出现结构节点。"""
+    tmp = [dict(r) for r in rows]
+    by = {r["draw"]: r for r in tmp}
+    struct = {d for d, r in by.items() if r.get("key") in ("shunt", "converg")}
+    for r in tmp:
+        if r["draw"] in struct:
+            continue
+        new_to = []
+        for t in r.get("to") or []:
+            if t in struct:
+                for x in by[t].get("to") or []:
+                    if x not in new_to:
+                        new_to.append(x)
+            elif t not in new_to:
+                new_to.append(t)
+        r["to"] = new_to
+    return [r for r in tmp if r["draw"] not in struct]
+
+
 def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
     """按动作类型建节点：默认 开始→申请人→每个 approve→结束；spec 有 flow 就按 flow 走。
 
@@ -484,9 +667,7 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
             r["label"] = _lab.get(r["name"], r["name"])
     # 执行动作不生成步骤：折叠成连线文字（用户 2026-11-26 明确要求）
     rows, _fold_labels, _redirect = fold_action_nodes(rows)
-    by_draw = {r["draw"]: r for r in rows}
-    # 连线文字：graph.edgeLabels 的键是「源节点名 → 目标节点名」，值是要显示的字（可能带换行）。
-    # 平台把它落在 FlowStepCon 的 note（varchar(200)）与 ConContentDesc（text）上。
+    # 连线文字先备好：并行分支判定要用它识别「返回修改」这类例外出口
     labels, user_lab = {}, set()
     if form.get("graph"):
         for k, v in (form["graph"].get("edgeLabels") or {}).items():
@@ -497,7 +678,21 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
                     labels[(a.strip(), b.strip())] = re.sub(r"\s*\n\s*", " ", v).strip()
                     user_lab.add((a.strip(), b.strip()))
     labels.update(_fold_labels)   # 执行动作折叠出来的连线文字
+    # 并行分支：折叠完动作再插，避免折叠改变拓扑后对不上（2026-11-27 平台实测）。
+    # 只认 spec 里显式标了 parallel 的分叉节点——二选一出口和并行长一个样，不能靠拓扑猜。
+    _only = {n["name"] for n in ((form.get("graph") or {}).get("nodes") or [])
+             if isinstance(n, dict) and n.get("parallel")}
+    rows, _parallel, _moved = insert_shunt_converg(rows, labels, only=_only)
+    for (a, old), new in _moved.items():
+        lab = labels.pop((a, old), None)
+        if lab and (a, new) not in labels:
+            labels[(a, new)] = lab
+    by_draw = {r["draw"]: r for r in rows}
     warns = []
+    for _s, _m, _brs in _parallel:
+        warns.append("并行分支「%s」已插分流(14)%s合流(15)"
+                     % ("、".join(by_draw[b]["name"] for b in _brs if b in by_draw),
+                        " + " if _m else "（未找到汇聚点，缺）"))
     for r in rows:
         meta = flow_types.meta_of(r["key"])
         if meta["node"] is None:
@@ -517,7 +712,8 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
         draw = r["draw"]
         prev = sorted({p["draw"] for p in rows if draw in (p.get("to") or [])})
         step = copy.deepcopy(defaults["step"])
-        icon = {"nodeStart": "green", "nodeEnd": "orange"}.get(node, "purple")
+        icon = {"nodeStart": "green", "nodeEnd": "orange",
+                "nodeIsShunt": "green", "nodeToConverg": "green"}.get(node, "purple")
         step.update({
             "FlowID": flow_id, "StepID": step_base + i, "DrawID": draw,
             "stepName": flow_types.label_of_node(node), "actualName": r.get("label") or r["name"],
@@ -532,13 +728,28 @@ def build_steps(form, flow_id, step_base, con_base, part_base, web=None):
             # importantShunt：该步骤「同意执行」的默认目标 = 下一步的绘图号；
             # 多条出线按出线顺序逗号分隔（判断节点就是各分支），没有出线（结束）为空。
             # 这两个键缺了，平台导入后「同意执行」不会默认选中下一步，只会落到「结束」。
-            "optStep": "" if node == "nodeJudge" else "1",
-            "importantShunt": ",".join(str(t) for t in r["to"]),
+            "optStep": "" if node in ("nodeJudge", "nodeIsShunt", "nodeToConverg") else "1",
+            # importantShunt 跳过分流/合流，写业务上的真正下一步（见 business_next）
+            "importantShunt": ",".join(str(t) for t in business_next(r["to"], by_draw)),
+            # 分流/合流与并行分支节点的 Shunt* 一组键（2026-11-27 平台实测样本）：
+            #   分流   "" / shuntChildren=false / shuntLayer=0
+            #   分支   ShuntFirstID=自身 / ShuntParentID=分流 / true / 1
+            #   合流   ShuntParentID=分流 / true / 1
+            "ShuntFirstID": str(r.get("_shunt_first") or ""),
+            "ShuntParentID": str(r.get("_shunt_parent") or ""),
+            "shuntChildren": bool(r.get("_shunt_children")),
+            "shuntLayer": int(r.get("_shunt_layer") or 0),
             # 退回设置：除开始/申请人/结束/判断外，节点默认「允许退回」
             # （平台「退回设置」页的开关 = isCanReturn；退回类型=退回申请人、具体步骤=无限制，全按默认）
             "isCanReturn": node not in ("nodeStart", "nodeFirst", "nodeEnd", "nodeJudge"),
             "SortID": 0, "layer": 0, "trendMode": 0, "shuntNext": 0,
         })
+        if node in ("nodeIsShunt", "nodeToConverg"):
+            # 结构节点没有人员、没有表单：平台导出件里是另一套默认键，
+            # 且没有 note、nodeIcon 不带普通节点那个尾随空格（逐键比对样本得出）
+            step.update(SHUNT_CONVERG_OVERRIDES)
+            step["nodeIcon"] = "%s el-icon-success i ep:success-filled" % icon
+            step.pop("note", None)
         # 注意：importantShunt 不要 pop——平台导出件里每个步骤都有，值见上。
         # 开始/申请人/结束节点也要保留 note（真实导出件里是空串，键不能少）
         steps.append(step)
@@ -1092,7 +1303,8 @@ def main(argv):
     open(path, "w", encoding="utf-8", newline="\n").write(
         json.dumps(d, ensure_ascii=False, separators=(",", ":")))
 
-    warns.extend(flow_types.judge_warnings(rows))
+    biz_rows = _chain_rows(rows)          # 打印链路：不出现分流/合流
+    warns.extend(flow_types.judge_warnings(biz_rows))
     seen_xy = {}
     for r in rows:
         key = (round(r["x"]), round(r["y"]))
@@ -1100,7 +1312,7 @@ def main(argv):
     for (x, y), names in seen_xy.items():
         if len(names) > 1:
             warns.append("节点坐标重复 (%d,%d)：%s —— 导入后画布上会叠在一起" % (x, y, "、".join(names)))
-    chain = flow_types.chain_text(rows)
+    chain = flow_types.chain_text(biz_rows)
     print("%-24s 节点=%d  %s" % (form["base"], len(rows), chain))
     for w in warns:
         print("       ! %s" % w)

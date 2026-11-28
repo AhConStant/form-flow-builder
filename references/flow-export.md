@@ -187,6 +187,58 @@ spec 侧写法见 `spec-format.md` 的「判断条件」；`build_export.build_c
 > `isValidate`：平台导出件里 `FlowSet` / `FlowSetVersion` 都是 `true`（流程已验证），
 > 生成器已对齐；骨架默认 `false`，导入后可能卡在「未验证」。
 
+## 并行分支：分流 / 合流结构节点（1.19.2 / 本地 1.3.5）
+
+多个节点**同时**处理（会签、并行审批）时，不能只把两条线挂在同一个节点上——平台不认，
+导入后流程图里没有并行结构，节点属性也缺 `Shunt*` 一组键。必须显式插两个结构节点
+（2026-11-27 用户平台实测，停车优惠申请表）：
+
+```text
+保卫科负责人审批 → 分流 → [人事科会签 | 财务科会签] → 合流 → 分管院领导审批
+```
+
+| 项 | 分流 | 合流 |
+|---|---|---|
+| `node` / `ActionTypeID` | `nodeIsShunt` / 14 | `nodeToConverg` / 15 |
+| `optStep` | 空串 | 空串 |
+| `importantShunt` | 各分支 DrawID（`"6,7"`） | 汇聚目标 DrawID（`"8"`） |
+| `ShuntParentID` | 空 | **分流节点的 DrawID**（`"10"`） |
+| `shuntChildren` / `shuntLayer` | `false` / `0` | `true` / `1` |
+
+并行分支上的业务节点（分流与合流之间）要补：
+`ShuntFirstID`=自身 DrawID、`ShuntParentID`=分流 DrawID、`shuntChildren=true`、`shuntLayer=1`；
+`processPrev` 改成分流、`processTo` 改成合流。连线条数比「一点多线」多 2 条，`FlowStepPart` 也各补一条。
+
+两条最容易漏的：
+
+- **`importantShunt` 要穿过结构节点**、写业务上的下一步：保卫科负责人审批写 `"6,7"`（分支），
+  人事科会签写 `"8"`（合流之后那个节点），**不要**写分流/合流的 DrawID（`business_next()` 负责展平）。
+- **分流/合流用的是另一套默认键**（无人员、无表单的结构节点）：`singleApprove=0`、`agreePercent=0.0`、
+  `selUserRange=2`、`unFinishedActive=1`、`isCanAssist=False`、`isCanDirectDelivery=True`、
+  `flowTriggerSetMode=0`、`flowToNoticeMode=1`、`flowToCirMode=1` 等；
+  导出件里**没有 `note` 键**，`nodeIcon` 也不带普通节点那个尾随空格。
+
+### 只在显式标记时插（`graph.nodes[].parallel: true`）
+
+上游 1.19.2 按「非判断节点出线 >1」自动插，套到 09 流程上会出事：
+审批节点的两条出线绝大多数是「同意 / 返回修改」，或者「有协同科室 / 无协同科室」这类**二选一**，
+拓扑上和并行一模一样。707 实测自动插：34 节点被撑到 **38**，多出 2 个坐标重合的合流。
+
+所以本地改成**默认关闭、标了才插**：
+
+```json
+{"name": "12 院领导签发", "type": "approve", "x": 1160, "y": 1610, "parallel": true}
+```
+
+标记后仍只把同时满足三条的分支算并行：目标在下方（y 更大）、目标名/连线文字不含
+返回/退回/终止/结束/不同意 等例外出口词、至少两条。退回边保持**直连**，不塞进分流。
+
+公文发文实测（12 院领导签发 → 13 知会 / 14 分发，另有 12.1 返回拟稿人修改）：
+`12.processTo = "17,15"`（分流 + 申请人复核）、`分流 → 13,14`、`合流 → 16 结束`，
+13/14 的 `ShuntFirstID` 分别是自身、`ShuntParentID` 都指向 17，退回边不受影响。
+
+**判断节点（`nodeJudge`）的多出线是条件分支，不插分流合流。**
+
 ## 步骤名不带层级序号
 
 平台导入后自己按结构编号，`actualName` / 连线 `nextActualName` 里再带一遍 `1 `、`5.1.1 ` 就重复了。
