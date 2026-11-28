@@ -280,6 +280,21 @@ python scripts/validate_form.py "流程表单/01发文流程(Web视图).txt"
 - 需要目视核对布局时：`python scripts/render_web_preview.py "xxx(Web视图).txt"`（预览器只核对字段/布局/列宽，不还原边框，别用它反推样式）。
   移动端控件清单用 `python scripts/render_mobile_preview.py "xxx(移动视图).txt"` 出手机版预览（看有没有漏生成的控件）。
 
+## 导入后：补流程权限（必做）
+
+平台导入只建表单和流程节点，**不写 `wmFlowCtl`**，流程会出现「没有流程权限」（列表里能看到、发起人打不开）。
+规则、字段模板与校验 SQL 见 `references/flow-permission.md`，脚本在 `sql/`。
+
+| 规则 | 口径 |
+|---|---|
+| S1 | 查 `wmFlowSet` 只用 `IsDeleted=0 and IsUse=1`（单流程才加 `Name`），**不带 `IsValidate=1`**——刚导入的流程常是「未验证」，加了条件取不到 FlowID、脚本静默跳过 |
+| S2 | 脚本不带 `USE`，执行前在 SSMS 选中目标库（sqlcmd 用 `-d`），可跨环境复用 |
+| S3 | 先插 `RoleID=-1`（仅 `ReadFlag=1`），再插 `RoleID=10`（`AdminFlag`/`WriteFlag`/`ReadFlag`=1）；按角色逐个判断、缺哪补哪，幂等 |
+
+- 单流程：`sql/01_单个流程_流程权限新增.sql`，改 `@FlowName` 为平台里的流程名（含括号、斜杠，逐字一致）。
+- 批量：`sql/02_全部流程_流程权限遍历补录.sql`，不带 name 条件；先看 ① 预览，再执行 ②，最后用 ③ 复核（正常每流程 2 条）。
+- 交付表单/流程时提醒一句：**导入平台后要补流程权限**；权限数据不在导出 JSON 里（同 R27），只能走数据库。
+
 ## 判断条件速查
 
 | 情况 | 处理 |
@@ -348,6 +363,9 @@ python scripts/validate_form.py "流程表单/01发文流程(Web视图).txt"
 | `references/flow-export.md` | 平台流程导出 JSON 解析（划节点/坐标/主线） |
 | `references/template-schema-xml.md` | 平台表单模板 XML（TemplateSchema）解读：属性字典→spec 映射、意见栏三件套、按节点拆视图与固定明细套路 |
 | `references/diagram-hbx.md` | 流程设计器 .hbx 解读：节点/连线结构、分支表达式宏、意见栏交叉验证、退回环路与多 TemplateId 风险 |
+| `references/flow-permission.md` | 导入后补流程权限（`wmFlowCtl`）：两张表、S1–S3 规则、两条模板、校验 SQL、列数差异 |
+| `sql/01_单个流程_流程权限新增.sql` | 单流程补权限：按流程名取 FlowID → 检查 → 补 `-1` / `10` → 回读 |
+| `sql/02_全部流程_流程权限遍历补录.sql` | 全量补权限：预览缺权限的流程 → 逐个补录 → 复核每流程条数 |
 
 ## 换平台 / 换模板
 
